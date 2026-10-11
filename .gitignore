@@ -1,0 +1,26 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+# 构建产物：/build 只匹配根级目录，build/ 兜住所有层级的子目录
+/build
+build/
+/captures
+.externalNativeBuild
+.cxx
+
+# AGP 9 新增的构建缓存目录
+.kotlin/
+
+# 打包产物与发布目录
+*.apk
+*.aab
+app/release/
+/.idea/
+.workbuddy/
