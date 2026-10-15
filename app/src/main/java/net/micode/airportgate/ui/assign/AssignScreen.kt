@@ -2,7 +2,6 @@ package net.micode.airportgate.ui.assign
 
 import android.content.pm.ActivityInfo
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,8 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Bolt
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -30,7 +27,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,16 +34,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.micode.airportgate.engine.reallocateAll
-import net.micode.airportgate.model.AllocationOutcome
+import net.micode.airportgate.engine.toAssignmentRows
+import net.micode.airportgate.engine.toUsageRows
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import net.micode.airportgate.model.AllocationStore
 import net.micode.airportgate.model.DAY_FLIGHTS
 import net.micode.airportgate.model.FlightItem
 import net.micode.airportgate.model.GATE_INFOS
@@ -62,14 +61,11 @@ import net.micode.airportgate.ui.components.AppCard
 import net.micode.airportgate.ui.components.FlightRow
 import net.micode.airportgate.ui.components.SectionTitle
 import net.micode.airportgate.ui.components.SubTopBar
-import net.micode.airportgate.ui.components.VerticalDividerCompat
 import net.micode.airportgate.ui.gantt.FullscreenGanttDialog
 import net.micode.airportgate.ui.gantt.GanttCard
 import net.micode.airportgate.ui.gantt.SlotDetailDialog
 import net.micode.airportgate.ui.theme.Blue
 import net.micode.airportgate.ui.theme.BlueLight
-import net.micode.airportgate.ui.theme.Green
-import net.micode.airportgate.ui.theme.Orange
 import net.micode.airportgate.ui.theme.TextMain
 import net.micode.airportgate.ui.theme.TextSub
 
@@ -77,29 +73,38 @@ import net.micode.airportgate.ui.theme.TextSub
 
 @Composable
 fun AssignScreen(onBack: () -> Unit) {
-    // ---- 当天航班分配结果（初始为既有计划；一键分配后由引擎重排） ----
+    // ---- 当天航班分配结果（初始为既有计划；数据一变即由引擎自动重排） ----
     var currentFlights by remember { mutableStateOf(DAY_FLIGHTS) }
-    var outcome by remember { mutableStateOf<AllocationOutcome?>(null) }
     var allocating by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
 
-    // 统计：已分配 = 当前占机位航班数；待分配 = 未成功占用机位的航班数
-    val totalFlights = DAY_FLIGHTS.size
-    val assigned = currentFlights.size
-    val pending = totalFlights - assigned
-
+    // 正常搜索：时间 + 机位（过滤下方航班列表与甘特图）
     var timeQuery by remember { mutableStateOf("") }
     var gateQuery by remember { mutableStateOf("") }
 
-    // 全天 00:00 - 24:00 航班（与甘特图共用同一数据源，按机位占用时刻正序排列）
-    val nowMin = remember { nowMinuteOfDay() }
-    val allFlights = remember(nowMin, currentFlights) {
-        currentFlights.sortedBy { it.startMin }.map { dayFlightToItem(it, nowMin) }
-    }
-
-    val filtered = allFlights.filter { f ->
-        (timeQuery.isBlank() || f.time.startsWith(timeQuery.trim())) &&
-                (gateQuery.isBlank() || f.gate.contains(gateQuery.trim(), ignoreCase = true))
+    // 自动分配：无按钮。以「航班 + 机位」内容哈希作为数据版本号，
+    // 版本一变（航班或机位信息更新）LaunchedEffect 自动取消旧任务并重新分配；
+    // 结果经 toAssignmentRows() 静默记入 AllocationStore（30 天留存，仅内存），
+    // 供后续自建「分配结果表」消费。失败航班号可从 outcome 取（此处不展示）。
+    var lastFailed by remember { mutableStateOf<List<String>>(emptyList()) }
+    // 每次重组都重算（不 remember），保证换数据源后内容一变版本号立即更新
+    val dataVersion = DAY_FLIGHTS.hashCode() * 31 + GATE_INFOS.hashCode()
+    LaunchedEffect(dataVersion) {
+        allocating = true
+        try {
+            val (newFlights, result) = withContext(Dispatchers.Default) {
+                reallocateAll(DAY_FLIGHTS, GATE_INFOS)
+            }
+            delay(300) // 让「分配中」状态可见
+            currentFlights = newFlights
+            lastFailed = result.failedFlightNos
+            // 分配结果按真实 addAssignment / addUsage 字段结构暂存（等同伴 GateRepository 合并后直接写库）
+            val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date())
+            val assignmentRows = toAssignmentRows(result, dateStr, DAY_FLIGHTS)
+            val usageRows = toUsageRows(result, dateStr, DAY_FLIGHTS, GATE_INFOS)
+            AllocationStore.record(assignmentRows, usageRows)
+        } finally {
+            allocating = false
+        }
     }
 
     // ---- 甘特图状态 ----
@@ -117,8 +122,19 @@ fun AssignScreen(onBack: () -> Unit) {
         onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     }
 
+    // 全天 00:00 - 24:00 航班（与甘特图共用同一数据源，按机位占用时刻正序排列）
+    val nowMin = remember { nowMinuteOfDay() }
+    val allFlights = remember(nowMin, currentFlights) {
+        currentFlights.sortedBy { it.startMin }.map { dayFlightToItem(it, nowMin) }
+    }
+
+    val filtered = allFlights.filter { f ->
+        (timeQuery.isBlank() || f.time.startsWith(timeQuery.trim())) &&
+                (gateQuery.isBlank() || f.gate.contains(gateQuery.trim(), ignoreCase = true))
+    }
+
     // ---- 甘特图数据：全天 24 小时机位占用时段（同机位时段重叠自动标红） ----
-    val gates = listOf("B27", "B32", "208", "C05", "C08", "T2-14", "D12")
+    val gates = GATE_INFOS.map { it.code }
     val ganttSlots = remember(nowMin, currentFlights) {
         markConflicts(currentFlights.map { dayFlightToSlot(it, nowMin) })
     }
@@ -137,143 +153,26 @@ fun AssignScreen(onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
-            // ---- 统计 ----
-            AppCard {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("$pending", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Orange)
-                        Spacer(Modifier.height(4.dp))
-                        Text("待分配航班", fontSize = 13.sp, color = TextSub)
-                    }
-                    VerticalDividerCompat()
-                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("$assigned", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Blue)
-                        Spacer(Modifier.height(4.dp))
-                        Text("已分配航班", fontSize = 13.sp, color = TextSub)
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-            // ---- 一键分配操作区（区间图着色 + 回溯法自动分配引擎） ----
+            // ---- 自动分配状态行（无按钮：航班/机位信息一变即自动重排） ----
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Row(
-                    Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (allocating) BlueLight else Blue)
-                        .clickable(enabled = !allocating) {
-                            allocating = true
-                            scope.launch {
-                                // 引擎在后台线程执行，避免阻塞 UI
-                                val (newFlights, result) = withContext(Dispatchers.Default) {
-                                    reallocateAll(currentFlights, GATE_INFOS)
-                                }
-                                delay(300) // 让「分配中」状态可见
-                                currentFlights = newFlights
-                                outcome = result
-                                allocating = false
-                            }
-                        }
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Outlined.Bolt, null,
-                        tint = Color.White,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        if (allocating) "分配中..." else "一键分配",
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-                Spacer(Modifier.width(12.dp))
-                Row(
-                    Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(enabled = !allocating) {
-                            currentFlights = DAY_FLIGHTS
-                            outcome = null
-                        }
-                        .padding(horizontal = 8.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Outlined.Refresh, null,
-                        tint = TextSub,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text("重置", color = TextSub, fontSize = 13.sp)
-                }
-                Spacer(Modifier.weight(1f))
                 Text(
-                    "区间图着色 + 回溯",
-                    fontSize = 11.sp,
+                    "自动分配：航班 / 机位信息更新后自动重排",
+                    fontSize = 12.sp,
                     color = TextSub
                 )
-            }
-
-            // ---- 分配结果卡片 ----
-            outcome?.let { r ->
-                Spacer(Modifier.height(12.dp))
-                AppCard {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "分配完成",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextMain
-                        )
-                        Spacer(Modifier.weight(1f))
-                        Text("耗时 ${r.elapsedMs} ms", fontSize = 12.sp, color = TextSub)
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Row(Modifier.fillMaxWidth()) {
-                        ResultCell(
-                            label = "成功",
-                            value = "${r.successCount}",
-                            color = Blue,
-                            modifier = Modifier.weight(1f)
-                        )
-                        ResultCell(
-                            label = "失败",
-                            value = "${r.failedFlightNos.size}",
-                            color = if (r.failedFlightNos.isNotEmpty()) Orange else TextSub,
-                            modifier = Modifier.weight(1f)
-                        )
-                        ResultCell(
-                            label = "回溯腾挪",
-                            value = "${r.moveCount} 次",
-                            color = TextMain,
-                            modifier = Modifier.weight(1f)
-                        )
-                        ResultCell(
-                            label = "时段冲突",
-                            value = "${r.conflictBefore} → ${r.conflictAfter}",
-                            color = if (r.conflictAfter < r.conflictBefore) Green else TextMain,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    if (r.failedFlightNos.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "无可用机位：${r.failedFlightNos.joinToString("、")}",
-                            fontSize = 12.sp,
-                            color = Orange
-                        )
-                    }
-                    if (r.conflictAfter < r.conflictBefore) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "已消除 ${r.conflictBefore - r.conflictAfter} 处同时段冲突",
-                            fontSize = 12.sp,
-                            color = Green
-                        )
-                    }
+                Spacer(Modifier.weight(1f))
+                if (allocating) {
+                    Text(
+                        "分配中…",
+                        fontSize = 12.sp,
+                        color = Blue
+                    )
+                } else {
+                    Text(
+                        "区间图着色 + 回溯",
+                        fontSize = 11.sp,
+                        color = TextSub
+                    )
                 }
             }
 
@@ -338,16 +237,6 @@ fun AssignScreen(onBack: () -> Unit) {
     // 色块详情弹窗
     selectedSlot?.let { slot ->
         SlotDetailDialog(slot = slot, onClose = { selectedSlot = null })
-    }
-}
-
-/** 分配结果卡片中的单项统计 */
-@Composable
-private fun ResultCell(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = color)
-        Spacer(Modifier.height(2.dp))
-        Text(label, fontSize = 12.sp, color = TextSub)
     }
 }
 

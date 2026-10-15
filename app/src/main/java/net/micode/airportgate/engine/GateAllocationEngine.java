@@ -40,17 +40,53 @@ public final class GateAllocationEngine {
 
     // ========================= 输入模型 =========================
 
-    /** 机位输入（GateInfo：编号 / 类型 / 等级） */
+    /** 机位输入（对齐 GateForEngine：编号 / 类型 / 可停机型系列 / 安全间隔 / 可用时段 / 状态） */
     public static final class GateIn {
-        public final String gate;
-        public final boolean bridge; // true=廊桥机位 false=远机位
-        public final int level;      // 大机型保障等级 1..3
+        public final String code;                // 机位编号
+        public final boolean isBridge;           // true=廊桥机位 false=远机位
+        public final List<String> aircraftClasses; // 可停靠机型系列名列表，如 ["A330","A320"]
+        public final int minInterval;            // 该机位安全间隔（分钟），取代全局常量
+        public final int openMin;                // 可用时段起（当日分钟 0..1439）
+        public final int closeMin;               // 可用时段止（当日分钟 0..1439）
+        public final String status;              // 可用 / 维护 / 停用
 
-        public GateIn(String gate, boolean bridge, int level) {
-            this.gate = gate;
-            this.bridge = bridge;
-            this.level = level;
+        public GateIn(String code, boolean isBridge, List<String> aircraftClasses,
+                      int minInterval, int openMin, int closeMin, String status) {
+            this.code = code;
+            this.isBridge = isBridge;
+            this.aircraftClasses = aircraftClasses;
+            this.minInterval = minInterval;
+            this.openMin = openMin;
+            this.closeMin = closeMin;
+            this.status = status;
         }
+    }
+
+    /** 机型系列名：截到第一个 '-' 或机型数字后的字母，如 "A330-300"->"A330"、"A320neo"->"A320" */
+    public static String seriesOf(String aircraft) {
+        if (aircraft == null) return "";
+        String s = aircraft.trim();
+        int dash = s.indexOf('-');
+        if (dash > 0) s = s.substring(0, dash);   // A330-300 -> A330
+        // A320neo -> A320：数字之后出现的字母截断
+        boolean seenDigit = false;
+        int cut = s.length();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (Character.isDigit(c)) seenDigit = true;
+            else if (seenDigit && Character.isLetter(c)) { cut = i; break; }
+        }
+        return s.substring(0, cut).trim();
+    }
+
+    /** 机型兼容：gate.aircraftClasses 包含航班系列名即通过；为空表示不限制 */
+    public static boolean compatible(GateIn g, FlightIn f) {
+        if (g.aircraftClasses == null || g.aircraftClasses.isEmpty()) return true;
+        String s = seriesOf(f.aircraft);
+        for (String c : g.aircraftClasses) {
+            if (c.trim().equalsIgnoreCase(s)) return true;
+        }
+        return false;
     }
 
     /** 航班输入（FlightInfo：航班号 / 机型 / 占用起止分钟） */
@@ -153,7 +189,7 @@ public final class GateAllocationEngine {
         // 机位 -> 已放置记录（放置与腾挪都通过此表维护，保证结果与实际一致）
         Map<String, List<Placement>> byGate = new HashMap<>();
         for (GateIn g : gates) {
-            byGate.put(g.gate, new ArrayList<Placement>());
+            byGate.put(g.code, new ArrayList<Placement>());
         }
 
         // 既有占用直接落入占用表
@@ -208,8 +244,8 @@ public final class GateAllocationEngine {
             for (Placement p : e.getValue()) {
                 boolean bridge = false;
                 for (GateIn g : gates) {
-                    if (g.gate.equals(p.gate)) {
-                        bridge = g.bridge;
+                    if (g.code.equals(p.gate)) {
+                        bridge = g.isBridge;
                         break;
                     }
                 }
@@ -229,41 +265,41 @@ public final class GateAllocationEngine {
                                    Map<String, List<Placement>> byGate, String exclude) {
         List<GateIn> candidates = new ArrayList<>(gates);
         if (exclude != null) {
-            candidates.removeIf(g -> g.gate.equals(exclude));
+            candidates.removeIf(g -> g.code.equals(exclude));
         }
         // 优先级策略（贴近真实调度，且与原数据可行解一致）：
         //   宽体：廊桥优先，廊桥不足时降级远机位；
         //   窄体：远机位优先，远机位不足时降级廊桥；
-        //   同类型内按保障等级降序。
+        //   同类型内按机位编号排序（原设计按保障等级，最终文档已去除 level 字段）。
         final boolean wide = f.isWideBody();
         Collections.sort(candidates, new Comparator<GateIn>() {
             @Override
             public int compare(GateIn a, GateIn b) {
-                if (a.bridge != b.bridge) {
-                    boolean aFirst = wide ? a.bridge : !a.bridge;
-                    boolean bFirst = wide ? b.bridge : !b.bridge;
+                if (a.isBridge != b.isBridge) {
+                    boolean aFirst = wide ? a.isBridge : !a.isBridge;
+                    boolean bFirst = wide ? b.isBridge : !b.isBridge;
                     if (aFirst != bFirst) {
                         return aFirst ? -1 : 1;
                     }
                 }
-                if (a.level != b.level) {
-                    return Integer.compare(b.level, a.level);
-                }
-                return a.gate.compareTo(b.gate);
+                return a.code.compareTo(b.code);
             }
         });
         for (GateIn g : candidates) {
-            if (isFree(byGate.get(g.gate), f.startMin, f.endMin)) {
-                return g.gate;
+            if (!"可用".equals(g.status)) continue;                       // status != 可用 跳过
+            if (!compatible(g, f)) continue;                              // 机型系列名不兼容跳过
+            if (f.startMin < g.openMin || f.endMin > g.closeMin) continue; // 超出可用时段跳过
+            if (isFree(byGate.get(g.code), f.startMin, f.endMin, g.minInterval)) {
+                return g.code;
             }
         }
         return null;
     }
 
-    /** 检查机位在 [start - GAP, end + GAP] 内是否空闲（含安全间隔） */
-    private static boolean isFree(List<Placement> placements, int start, int end) {
-        int from = start - SAFETY_GAP;
-        int to = end + SAFETY_GAP;
+    /** 检查机位在 [start - gap, end + gap] 内是否空闲（含该机位的安全间隔） */
+    private static boolean isFree(List<Placement> placements, int start, int end, int gap) {
+        int from = start - gap;
+        int to = end + gap;
         if (placements == null) {
             return true;
         }
@@ -289,25 +325,36 @@ public final class GateAllocationEngine {
             return null;
         }
         for (GateIn target : gates) {
-            List<Placement> placements = byGate.get(target.gate);
+            List<Placement> placements = byGate.get(target.code);
             if (placements == null || placements.isEmpty()) {
                 continue;
             }
-            for (Placement p : placements) {
-                // 仅当被占时段与当前航班（含安全间隔）冲突时才值得腾挪
-                if (!(f.startMin - SAFETY_GAP < p.interval[1]
-                        && p.interval[0] < f.endMin + SAFETY_GAP)) {
+            // 遍历快照，避免在对 placements 增删时触发 ConcurrentModificationException
+            for (Placement p : new ArrayList<>(placements)) {
+                // 仅当被占时段与当前航班（含该机位安全间隔）冲突时才值得腾挪
+                int gap = target.minInterval;
+                if (!(f.startMin - gap < p.interval[1]
+                        && p.interval[0] < f.endMin + gap)) {
                     continue;
                 }
                 // 为被占航班另寻机位（排除当前机位；pickGate 内部按机型偏好排序，
                 // 宽体可降级远机位，窄体可降级廊桥）
-                String alt = pickGate(p.flight, gates, byGate, target.gate);
+                String alt = pickGate(p.flight, gates, byGate, target.code);
                 if (alt != null) {
                     placements.remove(p);
                     byGate.get(alt).add(p);
                     p.gate = alt; // 同步更新机位，保证结果与实际一致
                     moveCount[0]++;
-                    return target.gate;
+                    // 腾挪后再次确认当前航班在该机位空闲（含安全间隔）；
+                    // 若仍冲突则回滚本次腾挪，继续尝试其它目标机位
+                    if (isFree(byGate.get(target.code), f.startMin, f.endMin, target.minInterval)) {
+                        return target.code;
+                    } else {
+                        byGate.get(alt).remove(p);
+                        placements.add(p);
+                        p.gate = target.code;
+                        moveCount[0]--;
+                    }
                 }
             }
         }

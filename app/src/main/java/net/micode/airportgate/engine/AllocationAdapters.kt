@@ -2,8 +2,10 @@ package net.micode.airportgate.engine
 
 import net.micode.airportgate.model.Allocation
 import net.micode.airportgate.model.AllocationOutcome
+import net.micode.airportgate.model.AssignmentRow
 import net.micode.airportgate.model.DayFlight
 import net.micode.airportgate.model.GateInfo
+import net.micode.airportgate.model.GateUsageRow
 
 // ========================= 引擎 <-> 界面数据适配 =========================
 
@@ -11,9 +13,11 @@ import net.micode.airportgate.model.GateInfo
 fun DayFlight.toFlightIn(): GateAllocationEngine.FlightIn =
     GateAllocationEngine.FlightIn(flightNo, aircraft, startMin, endMin)
 
-/** GateInfo（机位实体） -> 引擎机位输入 */
+/** GateInfo（GateForEngine 的内存映射）-> 引擎机位输入（1:1 字段对齐） */
 fun GateInfo.toGateIn(): GateAllocationEngine.GateIn =
-    GateAllocationEngine.GateIn(gate, isBridge, level)
+    GateAllocationEngine.GateIn(
+        code, isBridge, aircraftClasses, minInterval, openMin, closeMin, status
+    )
 
 /** 统计同机位时段重叠的对数（分配前/后冲突对比） */
 fun countConflicts(flights: List<DayFlight>): Int {
@@ -47,7 +51,7 @@ fun reallocateAll(
 
     // 保留航班的航线/机型等原始信息，仅更新机位与廊桥属性
     val byFlightNo = flights.associateBy { it.flightNo }
-    val gateMap = gates.associateBy { it.gate }
+    val gateMap = gates.associateBy { it.code }
     val newFlights = result.assignments.map { a ->
         val origin = byFlightNo[a.flightNo]!!
         origin.copy(
@@ -76,4 +80,78 @@ fun reallocateAll(
         conflictAfter = countConflicts(newFlights)
     )
     return newFlights to outcome
+}
+
+// ========================= 分配结果 -> 落库行（t_assignment / t_gate_usage） =========================
+
+/** 分钟数 -> "HH:mm" */
+private fun fmtHHmm(min: Int): String = "%02d:%02d".format(min / 60, min % 60)
+
+/** 本场机场：从本场出发为出港，否则为进港（DayFlight 无 direction 字段，按起点推导） */
+private const val HOME_AIRPORT = "上海浦东"
+private fun deriveDirection(from: String): String = if (from == HOME_AIRPORT) "出港" else "进港"
+
+/**
+ * AllocationOutcome -> t_assignment 行（对齐 GateRepository.addAssignment 入参）。
+ * 需要原始航班列表以取机型 / 进出港，date 用于 flight_date。
+ */
+fun toAssignmentRows(
+    outcome: AllocationOutcome,
+    date: String,
+    flights: List<DayFlight>,
+    operator: String = "系统",
+    version: Int = 1
+): List<AssignmentRow> {
+    val byFlightNo = flights.associateBy { it.flightNo }
+    return outcome.assignments.map { a ->
+        val f = byFlightNo[a.flightNo]
+        AssignmentRow(
+            flightNo = a.flightNo,
+            date = date,
+            gateNo = a.gate,
+            aircraft = f?.aircraft ?: "",
+            direction = f?.let { deriveDirection(it.from) } ?: "",
+            planStart = fmtHHmm(a.startMin),
+            planEnd = fmtHHmm(a.endMin),
+            isBridge = a.isBridge,
+            assignType = "自动分配",
+            operator = operator,
+            conflict = false,
+            version = version,
+            status = "已分配"
+        )
+    }
+}
+
+/**
+ * AllocationOutcome -> t_gate_usage 行（对齐 GateRepository.addUsage 入参）。
+ * region 由机位档案约定取；actual 暂以 plan 代替，occupyMinutes 取计划时长。
+ */
+fun toUsageRows(
+    outcome: AllocationOutcome,
+    date: String,
+    flights: List<DayFlight>,
+    gates: List<GateInfo>
+): List<GateUsageRow> {
+    val byFlightNo = flights.associateBy { it.flightNo }
+    val gateMap = gates.associateBy { it.code }
+    return outcome.assignments.map { a ->
+        val f = byFlightNo[a.flightNo]
+        val g = gateMap[a.gate]
+        val start = fmtHHmm(a.startMin)
+        val end = fmtHHmm(a.endMin)
+        GateUsageRow(
+            date = date,
+            gateNo = a.gate,
+            flightNo = a.flightNo,
+            region = g?.region ?: "",
+            isBridge = a.isBridge,
+            needBus = !a.isBridge,
+            planStart = start,
+            planEnd = end,
+            actualStart = start,
+            actualEnd = end,
+            occupyMinutes = (a.endMin - a.startMin).coerceAtLeast(0)
+        )
+    }
 }
