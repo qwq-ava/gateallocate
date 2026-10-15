@@ -5,13 +5,14 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 // ========================= 数据库建表 =========================
 //
-// 共 3 张业务表：
+// 共 4 张业务表：
 //   1. t_flight      航班信息表（导入 / 手工录入的原始航班计划）
-//   2. t_gate_usage  机位使用记录表（一次占用一条，统计靠桥率 / 利用率的数据源）
-//   3. t_assignment  机位分配结果表（分配方案的落库结果，可回溯）
+//   2. t_gate        机位信息表（机位档案，v4 起回归 SQLite，由机位维护模块维护）
+//   3. t_gate_usage  机位使用记录表（一次占用一条，统计靠桥率 / 利用率的数据源）
+//   4. t_assignment  机位分配结果表（分配方案的落库结果，可回溯）
 //
-// 机位档案不在库里：由机位维护模块用 SharedPreferences 存 JSON（model/GateInfo.kt），
-// 原 t_gate 表自 v3 起 DROP，避免与机位维护模块重复建表 / 预置数据。
+// 机位档案（t_gate）v3 一度改用 SharedPreferences 存储，v4 起回归 SQLite，
+// 由 data.db.GateInfoRepository 负责读写，对上层（机位维护 / 分配 / 统计）透明。
 //
 // 说明：为保证课程设计的可读性与可移植性，这里直接使用 Android 自带的
 // android.database.sqlite（零第三方依赖），后续若要换成 Room，
@@ -20,7 +21,7 @@ import android.database.sqlite.SQLiteOpenHelper
 object GateDbContract {
 
     const val DB_NAME = "airport_gate.db"
-    const val DB_VERSION = 3   // v3：移除 t_gate（机位档案改由机位维护模块用 SharedPreferences 维护）
+    const val DB_VERSION = 4   // v4：t_gate 回归 SQLite（机位档案由机位维护模块维护，仍走数据库）
 
     /** 数据保留策略（天）；-1 表示永久保留 */
     object Retention {
@@ -55,11 +56,25 @@ object GateDbContract {
         const val C_UPDATED = "updated_at"
     }
 
-    // ---------------- 2. 机位使用记录表 ----------------
+    // ---------------- 1.5 机位信息表（v4 重新纳入 SQLite） ----------------
     //
-    // 注：原「机位信息表 t_gate」自 v3 起移除（onUpgrade 中 DROP TABLE）。
-    // 机位档案由机位维护模块负责，用 SharedPreferences 存 JSON（见 model/GateInfo.kt），
-    // 不走 SQLite；引擎取机位请走 GateInfoStore.loadAvailableForEngine()。
+    // 机位档案由机位维护模块负责；v3 一度改用 SharedPreferences 存储，v4 起回归 SQLite。
+    // 字段口径对齐 model.GateInfoRow（row_id 为行唯一标识，code 为机位编号）。
+    // 引擎取机位仍走 model.GateInfo.kt 的 GateInfoStore（内部读写本表）。
+    object Gate {
+        const val TABLE = "t_gate"
+        const val C_ID = "_id"
+        const val C_ROW_ID = "row_id"             // GateInfoRow.id（UUID，编辑界面做 key）
+        const val C_CODE = "code"                 // 机位编号
+        const val C_BRIDGE = "bridge"             // 停机位种类：廊桥 / 远机位
+        const val C_AIRCRAFT_CLASS = "aircraft_class" // 可停靠机型系列名，逗号分隔
+        const val C_MIN_INTERVAL = "min_interval" // 安全间隔（分钟）
+        const val C_OPEN_TIME = "open_time"       // 可用时段起 HH:mm
+        const val C_CLOSE_TIME = "close_time"     // 可用时段止 HH:mm
+        const val C_STATUS = "status"             // 可用 / 维护 / 停用
+    }
+
+    // ---------------- 2. 机位使用记录表 ----------------
     object Usage {
         const val TABLE = "t_gate_usage"
         const val C_ID = "_id"
@@ -140,6 +155,25 @@ class GateDbHelper private constructor(context: Context) :
         db.execSQL(
             "CREATE INDEX IF NOT EXISTS idx_flight_date_status ON ${f.TABLE}(${f.C_FLIGHT_DATE},${f.C_STATUS})"
         )
+
+        // 机位信息表（v4 回归 SQLite）
+        val g = GateDbContract.Gate
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS ${g.TABLE} (
+                ${g.C_ID} INTEGER PRIMARY KEY AUTOINCREMENT,
+                ${g.C_ROW_ID} TEXT NOT NULL,
+                ${g.C_CODE} TEXT NOT NULL,
+                ${g.C_BRIDGE} TEXT NOT NULL,
+                ${g.C_AIRCRAFT_CLASS} TEXT NOT NULL,
+                ${g.C_MIN_INTERVAL} INTEGER DEFAULT 20,
+                ${g.C_OPEN_TIME} TEXT NOT NULL,
+                ${g.C_CLOSE_TIME} TEXT NOT NULL,
+                ${g.C_STATUS} TEXT NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_gate_code ON ${g.TABLE}(${g.C_CODE})")
 
         val u = GateDbContract.Usage
         db.execSQL(
@@ -228,6 +262,27 @@ class GateDbHelper private constructor(context: Context) :
             // 表名写字面量是因为 GateDbContract.Gate 已随本次改动移除。
             // 机位维护模块的数据不在 SQLite 里，DROP 不会影响它。
             db.execSQL("DROP TABLE IF EXISTS t_gate")
+        }
+
+        if (oldVersion < 4) {
+            // v4：机位档案回归 SQLite（注意 v3 已 DROP 过 t_gate，这里重新建回来）
+            val g = GateDbContract.Gate
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS ${g.TABLE} (
+                    ${g.C_ID} INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ${g.C_ROW_ID} TEXT NOT NULL,
+                    ${g.C_CODE} TEXT NOT NULL,
+                    ${g.C_BRIDGE} TEXT NOT NULL,
+                    ${g.C_AIRCRAFT_CLASS} TEXT NOT NULL,
+                    ${g.C_MIN_INTERVAL} INTEGER DEFAULT 20,
+                    ${g.C_OPEN_TIME} TEXT NOT NULL,
+                    ${g.C_CLOSE_TIME} TEXT NOT NULL,
+                    ${g.C_STATUS} TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_gate_code ON ${g.TABLE}(${g.C_CODE})")
         }
     }
 

@@ -83,9 +83,13 @@ fun nowMinuteOfDay(): Int {
         .coerceIn(0, 24 * 60 - 1)
 }
 
-// ---------- 全天航班计划：甘特图与「今日动态」列表共用的唯一数据源 ----------
+// ---------- 全天航班计划：甘特图与「今日动态」列表共用的视图模型 ----------
+//
+// 注意：真实的航班占用数据来自数据库 t_flight（经 GateRepository.loadFlights 读取），
+// 不再硬编码在此处；本文件只保留「一天内某航班在某机位的占用」的展示模型 DayFlight
+// 及其与甘特图色块 / 列表项的转换函数。
 
-/** 一条全天航班记录（含机位占用起止时刻） */
+/** 一条全天航班记录（含机位占用起止时刻），由分配引擎输出后填充 */
 data class DayFlight(
     val flightNo: String,
     val gate: String,
@@ -95,75 +99,6 @@ data class DayFlight(
     val from: String,
     val to: String,
     val aircraft: String
-)
-
-private fun hm(h: Int, m: Int) = h * 60 + m
-
-/** 全天 00:00 - 24:00 的机位分配结果：7 个机位 × 50 个航班时段 */
-val DAY_FLIGHTS = listOf(
-    // ---- B27（廊桥）----
-    DayFlight("CZ3401", "B27", hm(0, 20), hm(2, 10), true, "广州白云", "上海浦东", "A321neo"),
-    DayFlight("MU5102", "B27", hm(6, 15), hm(8, 5), true, "昆明长水", "上海浦东", "A330-300"),
-    DayFlight("CA1856", "B27", hm(9, 35), hm(11, 20), true, "上海浦东", "北京首都", "A330-300"),
-    DayFlight("MU2458", "B27", hm(12, 10), hm(14, 0), true, "上海浦东", "西安咸阳", "A320neo"),
-    DayFlight("CZ3892", "B27", hm(15, 20), hm(17, 10), true, "武汉天河", "上海浦东", "B737-800"),
-    DayFlight("CA1502", "B27", hm(18, 40), hm(20, 35), true, "上海浦东", "深圳宝安", "A321neo"),
-    DayFlight("MU2890", "B27", hm(21, 30), hm(23, 20), true, "厦门高崎", "上海浦东", "A330-200"),
-
-    // ---- B32（廊桥）----
-    DayFlight("MU5301", "B32", hm(1, 10), hm(3, 0), true, "上海浦东", "三亚凤凰", "A321neo"),
-    DayFlight("CA1202", "B32", hm(6, 50), hm(8, 40), true, "北京首都", "上海浦东", "B787-9"),
-    DayFlight("MU5217", "B32", hm(10, 10), hm(11, 50), true, "西安咸阳", "上海浦东", "A350-900"),
-    DayFlight("CZ3104", "B32", hm(13, 5), hm(14, 50), true, "上海浦东", "广州白云", "B737-800"),
-    DayFlight("MU2186", "B32", hm(16, 0), hm(17, 50), true, "成都天府", "上海浦东", "A320neo"),
-    DayFlight("CA1830", "B32", hm(19, 10), hm(21, 0), true, "上海浦东", "青岛胶东", "A321neo"),
-    DayFlight("HU7605", "B32", hm(22, 10), hm(23, 55), true, "海口美兰", "上海浦东", "B737 MAX 8"),
-
-    // ---- 208（廊桥）----
-    DayFlight("3U8801", "208", hm(2, 30), hm(4, 10), true, "重庆江北", "上海浦东", "A319"),
-    DayFlight("CZ6101", "208", hm(7, 20), hm(9, 0), true, "上海浦东", "长沙黄花", "A320neo"),
-    DayFlight("MU5137", "208", hm(9, 42), hm(11, 5), true, "上海浦东", "广州白云", "A330-300"),
-    DayFlight("CA4192", "208", hm(11, 40), hm(13, 25), true, "天津滨海", "上海浦东", "B737-800"),
-    DayFlight("MU2831", "208", hm(14, 40), hm(16, 30), true, "上海浦东", "哈尔滨太平", "A321neo"),
-    DayFlight("CZ3421", "208", hm(17, 45), hm(19, 35), true, "深圳宝安", "上海浦东", "A330-200"),
-    DayFlight("3U8921", "208", hm(20, 50), hm(22, 40), true, "上海浦东", "重庆江北", "A320neo"),
-
-    // ---- C05（远机位，含一处冲突）----
-    DayFlight("MU2701", "C05", hm(0, 45), hm(2, 30), false, "南京禄口", "上海浦东", "A320neo"),
-    DayFlight("MU2688", "C05", hm(6, 20), hm(8, 5), false, "上海浦东", "郑州新郑", "B737-800"),
-    DayFlight("CZ3582", "C05", hm(9, 0), hm(10, 30), false, "上海浦东", "成都天府", "A321neo"),
-    DayFlight("MU2721", "C05", hm(10, 15), hm(11, 45), false, "成都天府", "上海浦东", "A320neo"),
-    DayFlight("CA1620", "C05", hm(12, 30), hm(14, 20), false, "上海浦东", "大连周水子", "A319"),
-    DayFlight("CZ3586", "C05", hm(15, 10), hm(17, 0), false, "昆明长水", "上海浦东", "B737-800"),
-    DayFlight("MU2790", "C05", hm(18, 20), hm(20, 10), false, "上海浦东", "厦门高崎", "A321neo"),
-    DayFlight("CZ3590", "C05", hm(21, 15), hm(23, 5), false, "深圳宝安", "上海浦东", "A320neo"),
-
-    // ---- C08（远机位）----
-    DayFlight("HU7103", "C08", hm(3, 20), hm(5, 0), false, "上海浦东", "海口美兰", "B787-9"),
-    DayFlight("CZ3577", "C08", hm(6, 40), hm(8, 20), false, "青岛胶东", "上海浦东", "A321neo"),
-    DayFlight("CZ3588", "C08", hm(9, 50), hm(11, 40), false, "上海浦东", "成都天府", "A350-900"),
-    DayFlight("MU5142", "C08", hm(12, 25), hm(14, 10), false, "西安咸阳", "上海浦东", "A320neo"),
-    DayFlight("CA1886", "C08", hm(15, 30), hm(17, 20), false, "上海浦东", "武汉天河", "B737-800"),
-    DayFlight("CZ3862", "C08", hm(18, 5), hm(19, 55), false, "三亚凤凰", "上海浦东", "A321neo"),
-    DayFlight("MU5198", "C08", hm(20, 40), hm(22, 30), false, "上海浦东", "昆明长水", "A330-300"),
-
-    // ---- T2-14（远机位）----
-    DayFlight("CZ6011", "T2-14", hm(4, 10), hm(5, 50), false, "上海浦东", "三亚凤凰", "A321neo"),
-    DayFlight("3U8891", "T2-14", hm(8, 56), hm(10, 10), false, "上海浦东", "重庆江北", "A320neo"),
-    DayFlight("CZ6387", "T2-14", hm(11, 20), hm(13, 10), false, "长沙黄花", "上海浦东", "B737-800"),
-    DayFlight("MU5912", "T2-14", hm(14, 15), hm(16, 5), false, "上海浦东", "天津滨海", "A319"),
-    DayFlight("3U8887", "T2-14", hm(17, 0), hm(18, 50), false, "重庆江北", "上海浦东", "A320neo"),
-    DayFlight("CZ6812", "T2-14", hm(19, 40), hm(21, 30), false, "上海浦东", "深圳宝安", "A321neo"),
-    DayFlight("HU7411", "T2-14", hm(22, 20), hm(23, 59), false, "北京首都", "上海浦东", "B787-9"),
-
-    // ---- D12（远机位）----
-    DayFlight("3U8701", "D12", hm(5, 5), hm(6, 45), false, "上海浦东", "重庆江北", "A319"),
-    DayFlight("HU7281", "D12", hm(8, 43), hm(10, 0), false, "上海浦东", "昆明长水", "B737-800"),
-    DayFlight("CZ3428", "D12", hm(10, 50), hm(12, 35), false, "南京禄口", "上海浦东", "A320neo"),
-    DayFlight("MU2314", "D12", hm(13, 40), hm(15, 30), false, "上海浦东", "西安咸阳", "A321neo"),
-    DayFlight("CA1722", "D12", hm(16, 20), hm(18, 10), false, "哈尔滨太平", "上海浦东", "A330-200"),
-    DayFlight("HU7395", "D12", hm(19, 0), hm(20, 50), false, "上海浦东", "长沙黄花", "B737-800"),
-    DayFlight("3U8755", "D12", hm(21, 40), hm(23, 30), false, "重庆江北", "上海浦东", "A320neo")
 )
 
 /** 全天计划 -> 甘特图色块 */

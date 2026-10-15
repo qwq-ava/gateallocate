@@ -118,7 +118,7 @@ object GateRepository {
         val out = mutableListOf<FlightDraft>()
         val c = db(context).rawQuery(
             "SELECT ${f.C_ID},${f.C_FLIGHT_NO},${f.C_DIRECTION},${f.C_AIRCRAFT}," +
-                "${f.C_ARRIVAL_TIME},${f.C_DEPARTURE_TIME},${f.C_ORIGIN},${f.C_DEST} " +
+                "${f.C_ARRIVAL_TIME},${f.C_DEPARTURE_TIME},${f.C_ORIGIN},${f.C_DEST},${f.C_GATE_NO},${f.C_STATUS} " +
                 "FROM ${f.TABLE} WHERE ${f.C_FLIGHT_DATE}=? " +
                 "ORDER BY COALESCE(${f.C_ARRIVAL_TIME}, 1440) ASC, ${f.C_SCHED_TIME} ASC",
             arrayOf(date)
@@ -133,7 +133,9 @@ object GateRepository {
                     arrivalTime = if (it.isNull(4)) "" else minutesToTime(it.getInt(4)),
                     departureTime = if (it.isNull(5)) "" else minutesToTime(it.getInt(5)),
                     origin = it.getString(6),
-                    dest = it.getString(7)
+                    dest = it.getString(7),
+                    gateNo = if (it.isNull(8)) "" else it.getString(8),
+                    status = if (it.isNull(9)) "" else it.getString(9)
                 )
             }
         }
@@ -160,7 +162,7 @@ object GateRepository {
         val out = mutableListOf<FlightDraft>()
         val c = db(context).rawQuery(
             "SELECT ${f.C_ID},${f.C_FLIGHT_NO},${f.C_DIRECTION},${f.C_AIRCRAFT}," +
-                "${f.C_ARRIVAL_TIME},${f.C_DEPARTURE_TIME},${f.C_ORIGIN},${f.C_DEST} " +
+                "${f.C_ARRIVAL_TIME},${f.C_DEPARTURE_TIME},${f.C_ORIGIN},${f.C_DEST},${f.C_GATE_NO},${f.C_STATUS} " +
                 "FROM ${f.TABLE} WHERE ${f.C_FLIGHT_DATE}=? AND ${f.C_STATUS}='待分配' " +
                 "ORDER BY COALESCE(${f.C_ARRIVAL_TIME}, 1440) ASC",
             arrayOf(date)
@@ -175,7 +177,9 @@ object GateRepository {
                     arrivalTime = if (it.isNull(4)) "" else minutesToTime(it.getInt(4)),
                     departureTime = if (it.isNull(5)) "" else minutesToTime(it.getInt(5)),
                     origin = it.getString(6),
-                    dest = it.getString(7)
+                    dest = it.getString(7),
+                    gateNo = if (it.isNull(8)) "" else it.getString(8),
+                    status = if (it.isNull(9)) "" else it.getString(9)
                 )
             }
         }
@@ -233,7 +237,7 @@ object GateRepository {
 
     // ---------------- 2. 机位使用记录表 ----------------
     //
-    // 注：机位档案不在这个库里，见 model/GateInfo.kt（SharedPreferences + JSON）。
+    // 机位档案在 t_gate（见 model.GateInfo.kt + data.db.GateInfoRepository），本表只记占用流水。
 
     /** 记录一次机位占用（分配执行 / 航班保障结束时调用） */
     fun addUsage(
@@ -325,7 +329,7 @@ object GateRepository {
                 minutes = it.getInt(2)
             }
         }
-        // 机位档案不在这个库里，走 GateInfoStore（SharedPreferences）
+        // 机位档案在 t_gate（SQLite），经 GateInfoStore 读取
         val gates = GateInfoStore.load(context).size.coerceAtLeast(1)
         return DayUsageStat(
             flightCount = flights,
@@ -405,6 +409,31 @@ object GateRepository {
         GateDbContract.Usage.TABLE to scalarInt(context, "SELECT COUNT(*) FROM ${GateDbContract.Usage.TABLE}"),
         GateDbContract.Assign.TABLE to scalarInt(context, "SELECT COUNT(*) FROM ${GateDbContract.Assign.TABLE}")
     )
+
+    // ---------------- 分配结果落库辅助 ----------------
+
+    /**
+     * 清空某一天 t_assignment + t_gate_usage（重新自动分配前调用，避免旧结果堆积）。
+     * @return 删除的总条数
+     */
+    fun clearDayResults(context: Context, date: String): Int {
+        val a = GateDbContract.Assign
+        val u = GateDbContract.Usage
+        val d1 = db(context).delete(a.TABLE, "${a.C_FLIGHT_DATE}=?", arrayOf(date))
+        val d2 = db(context).delete(u.TABLE, "${u.C_FLIGHT_DATE}=?", arrayOf(date))
+        return d1 + d2
+    }
+
+    /** 分配完成后回写航班：机位编号 + 状态（待分配 -> 已分配），并更新时间戳 */
+    fun markFlightAssigned(context: Context, id: Long, gateNo: String): Int {
+        val f = GateDbContract.Flight
+        val cv = ContentValues().apply {
+            put(f.C_GATE_NO, gateNo)
+            put(f.C_STATUS, "已分配")
+            put(f.C_UPDATED, timestampNow())
+        }
+        return db(context).update(f.TABLE, cv, "${f.C_ID}=?", arrayOf(id.toString()))
+    }
 
     // ---------------- 工具 ----------------
 

@@ -28,7 +28,9 @@ data class FlightDraft(
     val arrivalTime: String = "",   // HH:mm 计划到达（上轮挡 / 开始占用机位）
     val departureTime: String = "", // HH:mm 计划离开（撤轮挡 / 结束占用机位）
     val origin: String = "",        // 始发机场
-    val dest: String = ""           // 目的机场
+    val dest: String = "",          // 目的机场
+    val gateNo: String = "",        // 分配到的机位编号（分配后由 markFlightAssigned 回写）
+    val status: String = ""         // 分配状态：待分配 / 已分配 / 已取消 / 已完成
 ) {
     /** 展示 / 兜底用的计划起降时刻：进港看到达，出港看离开 */
     val planTime: String
@@ -109,4 +111,26 @@ fun timestampNow(): String {
         c.get(Calendar.MINUTE),
         c.get(Calendar.SECOND)
     )
+}
+
+/** 当前时间 HH:mm（首页"更新于"展示用） */
+fun nowHHmm(): String {
+    val c = Calendar.getInstance()
+    return "%02d:%02d".format(c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE))
+}
+
+/** 今天日期 + 中文星期，格式 yyyy-MM-dd 星期X（首页头部展示用） */
+fun todayWithWeekday(): String {
+    val c = Calendar.getInstance()
+    val w = when (c.get(Calendar.DAY_OF_WEEK)) {
+        Calendar.SUNDAY -> "日"
+        Calendar.MONDAY -> "一"
+        Calendar.TUESDAY -> "二"
+        Calendar.WEDNESDAY -> "三"
+        Calendar.THURSDAY -> "四"
+        Calendar.FRIDAY -> "五"
+        Calendar.SATURDAY -> "六"
+        else -> ""
+    }
+    return "${dateOf(0)} 星期$w"
 }

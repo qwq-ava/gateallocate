@@ -31,6 +31,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import net.micode.airportgate.model.DataSync
 import net.micode.airportgate.model.GateInfoOptions
 import net.micode.airportgate.model.GateInfoRow
 import net.micode.airportgate.model.GateInfoStore
@@ -77,6 +78,8 @@ fun GateInfoRoute(onBack: () -> Unit, showMsg: (String) -> Unit) {
             onConfirm = { saved ->
                 rows = saved
                 GateInfoStore.save(context, saved)
+                // 机位数据已变更，触发分配界面自动重排
+                DataSync.bump()
                 editing = false
                 showMsg("机位信息已保存：共 ${saved.size} 个机位")
             },

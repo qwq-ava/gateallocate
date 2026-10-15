@@ -19,7 +19,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -40,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import net.micode.airportgate.data.db.GateRepository
+import net.micode.airportgate.model.DataSync
 import net.micode.airportgate.model.FlightDraft
 import net.micode.airportgate.model.ImportRecord
 import net.micode.airportgate.model.dateCompactOf
@@ -116,6 +116,8 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
                     "$date 已保存 $n 条" +
                         (if (skipped > 0) "，$skipped 条信息不完整未保存" else "")
                 )
+                // 航班数据已变更，触发分配界面自动重排
+                DataSync.bump()
                 formMode = null
             }
         )
@@ -198,26 +200,6 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
                             FieldChip(field, Modifier.padding(end = 8.dp, bottom = 8.dp))
                         }
                     }
-                }
-                Spacer(Modifier.height(6.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        Modifier.clickable { showMsg("开始下载导入模板…") },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Outlined.Download, null, tint = Blue, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("下载导入模板", fontSize = 13.sp, color = Blue)
-                    }
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        "航班日期由页签自动带入，无需填写",
-                        fontSize = 11.sp,
-                        color = TextSub
-                    )
                 }
             }
 

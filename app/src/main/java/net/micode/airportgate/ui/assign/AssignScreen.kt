@@ -40,20 +40,18 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import net.micode.airportgate.data.db.GateRepository
 import net.micode.airportgate.engine.reallocateAll
 import net.micode.airportgate.engine.toAssignmentRows
 import net.micode.airportgate.engine.toUsageRows
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import net.micode.airportgate.model.AllocationStore
-import net.micode.airportgate.model.DAY_FLIGHTS
-import net.micode.airportgate.model.FlightItem
-import net.micode.airportgate.model.GATE_INFOS
+import net.micode.airportgate.model.DayFlight
+import net.micode.airportgate.model.DataSync
 import net.micode.airportgate.model.GateSlot
-import net.micode.airportgate.model.findActivity
+import net.micode.airportgate.model.GateInfoStore
+import net.micode.airportgate.model.dateOf
 import net.micode.airportgate.model.dayFlightToItem
 import net.micode.airportgate.model.dayFlightToSlot
+import net.micode.airportgate.model.findActivity
 import net.micode.airportgate.model.fmtTime
 import net.micode.airportgate.model.markConflicts
 import net.micode.airportgate.model.nowMinuteOfDay
@@ -73,35 +71,67 @@ import net.micode.airportgate.ui.theme.TextSub
 
 @Composable
 fun AssignScreen(onBack: () -> Unit) {
-    // ---- 当天航班分配结果（初始为既有计划；数据一变即由引擎自动重排） ----
-    var currentFlights by remember { mutableStateOf(DAY_FLIGHTS) }
+    val context = LocalContext.current
+    // 当前航班日期 = 今天（分配结果按天落库，与导入页签口径一致）
+    val today = remember { dateOf(0) }
+
+    // ---- 分配结果（引擎输出，用于甘特图与「今日动态」列表展示） ----
+    var currentFlights by remember { mutableStateOf<List<DayFlight>>(emptyList()) }
+    var gateCodes by remember { mutableStateOf<List<String>>(emptyList()) }
     var allocating by remember { mutableStateOf(false) }
 
     // 正常搜索：时间 + 机位（过滤下方航班列表与甘特图）
     var timeQuery by remember { mutableStateOf("") }
     var gateQuery by remember { mutableStateOf("") }
 
-    // 自动分配：无按钮。以「航班 + 机位」内容哈希作为数据版本号，
-    // 版本一变（航班或机位信息更新）LaunchedEffect 自动取消旧任务并重新分配；
-    // 结果经 toAssignmentRows() 静默记入 AllocationStore（30 天留存，仅内存），
-    // 供后续自建「分配结果表」消费。失败航班号可从 outcome 取（此处不展示）。
+    // 自动分配：无按钮。航班导入 / 机位维护保存后由 DataSync.bump() 自增版本号，
+    // 版本一变（或首次进入界面）LaunchedEffect 自动重新分配；
+    // 结果写入 t_assignment / t_gate_usage，并回写 t_flight 的机位与状态。
     var lastFailed by remember { mutableStateOf<List<String>>(emptyList()) }
-    // 每次重组都重算（不 remember），保证换数据源后内容一变版本号立即更新
-    val dataVersion = DAY_FLIGHTS.hashCode() * 31 + GATE_INFOS.hashCode()
+    val dataVersion = DataSync.version
     LaunchedEffect(dataVersion) {
         allocating = true
         try {
+            // 数据源：t_flight（航班）+ t_gate（机位，经 GateInfoStore 读取）
+            val drafts = GateRepository.loadFlights(context, today)
+                .filter { it.valid && it.status != "已取消" }
+            val gates = GateInfoStore.loadAvailableForEngine(context)
+            gateCodes = gates.map { it.code }
+            if (drafts.isEmpty() || gates.isEmpty()) {
+                currentFlights = emptyList()
+                lastFailed = emptyList()
+                return@LaunchedEffect
+            }
             val (newFlights, result) = withContext(Dispatchers.Default) {
-                reallocateAll(DAY_FLIGHTS, GATE_INFOS)
+                reallocateAll(drafts, gates)
             }
             delay(300) // 让「分配中」状态可见
             currentFlights = newFlights
             lastFailed = result.failedFlightNos
-            // 分配结果按真实 addAssignment / addUsage 字段结构暂存（等同伴 GateRepository 合并后直接写库）
-            val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date())
-            val assignmentRows = toAssignmentRows(result, dateStr, DAY_FLIGHTS)
-            val usageRows = toUsageRows(result, dateStr, DAY_FLIGHTS, GATE_INFOS)
-            AllocationStore.record(assignmentRows, usageRows)
+
+            // ---- 分配结果落库 ----
+            // 1) 先清当天旧结果，避免重复堆积
+            GateRepository.clearDayResults(context, today)
+            // 2) 写入 t_assignment / t_gate_usage
+            val assignmentRows = toAssignmentRows(result, today, drafts)
+            val usageRows = toUsageRows(result, today, drafts)
+            assignmentRows.forEach { a ->
+                GateRepository.addAssignment(
+                    context, today, a.flightNo, a.gateNo, a.aircraft, a.direction,
+                    a.planStart, a.planEnd, a.isBridge, a.assignType, a.operator, a.conflict, a.version
+                )
+            }
+            usageRows.forEach { u ->
+                GateRepository.addUsage(
+                    context, u.date, u.gateNo, u.flightNo, u.region, u.isBridge, u.needBus,
+                    u.planStart, u.planEnd, u.actualStart, u.actualEnd, u.occupyMinutes
+                )
+            }
+            // 3) 回写航班：机位编号 + 状态（待分配 -> 已分配）
+            drafts.forEach { f ->
+                val a = result.assignments.firstOrNull { it.flightNo == f.flightNo }
+                if (a != null) GateRepository.markFlightAssigned(context, f.id, a.gate)
+            }
         } finally {
             allocating = false
         }
@@ -110,7 +140,7 @@ fun AssignScreen(onBack: () -> Unit) {
     // ---- 甘特图状态 ----
     var showFullGantt by remember { mutableStateOf(false) }
     var selectedSlot by remember { mutableStateOf<GateSlot?>(null) }
-    val activity = LocalContext.current.findActivity()
+    val activity = context.findActivity()
     LaunchedEffect(showFullGantt) {
         activity?.requestedOrientation = if (showFullGantt) {
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -134,12 +164,10 @@ fun AssignScreen(onBack: () -> Unit) {
     }
 
     // ---- 甘特图数据：全天 24 小时机位占用时段（同机位时段重叠自动标红） ----
-    val gates = GATE_INFOS.map { it.code }
+    val shownGates = if (gateQuery.isBlank()) gateCodes else gateCodes.filter { it.contains(gateQuery.trim(), true) }
     val ganttSlots = remember(nowMin, currentFlights) {
         markConflicts(currentFlights.map { dayFlightToSlot(it, nowMin) })
     }
-    // 甘特图同样跟随上方搜索条件过滤
-    val shownGates = if (gateQuery.isBlank()) gates else gates.filter { it.contains(gateQuery.trim(), true) }
     val shownSlots = ganttSlots.filter { s ->
         shownGates.contains(s.gate) &&
                 (timeQuery.isBlank() || fmtTime(s.startMin).startsWith(timeQuery.trim()))
@@ -207,7 +235,8 @@ fun AssignScreen(onBack: () -> Unit) {
                 Spacer(Modifier.height(6.dp))
                 if (filtered.isEmpty()) {
                     Text(
-                        "没有符合条件的航班",
+                        if (currentFlights.isEmpty()) "暂无航班数据，请先在「航班导入」录入"
+                        else "没有符合条件的航班",
                         fontSize = 13.sp,
                         color = TextSub,
                         modifier = Modifier.padding(vertical = 16.dp).fillMaxWidth(),

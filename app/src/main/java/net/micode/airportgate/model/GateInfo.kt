@@ -1,8 +1,10 @@
 package net.micode.airportgate.model
 
 import android.content.Context
+import net.micode.airportgate.data.db.GateInfoRepository
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
 // ========================= 机位信息表数据模型 =========================
 //
@@ -13,7 +15,8 @@ import org.json.JSONObject
 //   openTime/closeTime  可用时段，航班占用窗口必须落在其中
 //   status          可用 / 维护 / 停用，引擎只分配「可用」的机位
 //
-// 持久化：SharedPreferences 存 JSON，无需额外依赖，重启后保留。
+// 持久化（v4 起）：SQLite t_gate，由 data.db.GateInfoRepository 负责读写；
+// 首次无数据时写入默认示例，并把 v3 残留在 SharedPreferences 的旧数据迁移过来。
 
 data class GateInfoRow(
     val id: String = "",
@@ -93,13 +96,11 @@ private fun GateInfoRow.toEngine() = GateForEngine(
 )
 
 /**
- * 机位信息表的持久化：用 SharedPreferences 存为 JSON，
- * 无需引入额外依赖，应用重启后依然保留。
+ * 机位信息表的持久化入口：v4 起读写 SQLite t_gate（见 data.db.GateInfoRepository）。
+ * 对外接口（load / save / loadAvailableForEngine / loadAllForEngine）保持不变，
+ * 因此机位维护界面、统计界面、分配引擎都不需要改动。
  */
 object GateInfoStore {
-    private const val PREFS = "gate_info_prefs"
-    private const val KEY = "gate_rows"
-
     /** 首次启动的默认示例数据（覆盖廊桥/远机位、各机型系列、各状态、不同安全间隔） */
     fun defaultRows(): List<GateInfoRow> = listOf(
         GateInfoRow("g1", "B27", GateInfoOptions.BRIDGE, "A320,A321,A320neo", 20, "06:00", "23:00", GateInfoOptions.STATUS_AVAILABLE),
@@ -110,60 +111,19 @@ object GateInfoStore {
         GateInfoRow("g6", "T2-14", GateInfoOptions.REMOTE, "A321,A320neo,B737-800", 20, "06:00", "23:00", GateInfoOptions.STATUS_AVAILABLE)
     )
 
+    /** 读取全部机位：库里有数据直接返回；库空则迁移旧 SharedPreferences 或写入默认数据 */
     fun load(context: Context): List<GateInfoRow> {
-        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val raw = sp.getString(KEY, null)
-        if (raw.isNullOrEmpty()) return defaultRows()
-        return try {
-            val arr = JSONArray(raw)
-            val out = mutableListOf<GateInfoRow>()
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                out.add(
-                    GateInfoRow(
-                        id = o.optString("id", ""),
-                        code = o.optString("code", ""),
-                        // 旧数据兼容：旧字段名 standType，旧值「近机位」
-                        bridge = migrateBridge(
-                            o.optString("bridge", o.optString("standType", GateInfoOptions.BRIDGE))
-                        ),
-                        aircraftClass = o.optString("aircraftClass", ""),
-                        minInterval = o.optInt("minInterval", GateInfoOptions.DEFAULT_INTERVAL),
-                        openTime = o.optString("openTime", "06:00"),
-                        closeTime = o.optString("closeTime", "23:00"),
-                        // 旧数据兼容：开放 -> 可用，关闭 -> 维护，不可用 -> 停用
-                        status = migrateStatus(
-                            o.optString("status", GateInfoOptions.STATUS_AVAILABLE)
-                        )
-                    )
-                )
-            }
-            out.ifEmpty { defaultRows() }
-        } catch (e: Exception) {
-            defaultRows()
-        }
+        val rows = GateInfoRepository.loadAll(context)
+        if (rows.isNotEmpty()) return rows
+        // 首次：先尝试迁移 v3 残留在 SharedPreferences 的数据，否则落默认数据
+        val base = migrateFromPrefs(context).ifEmpty { defaultRows() }
+        GateInfoRepository.replaceAll(context, base)
+        return base
     }
 
+    /** 保存（机位维护界面「确定」时整表替换） */
     fun save(context: Context, rows: List<GateInfoRow>) {
-        val arr = JSONArray()
-        rows.forEach {
-            arr.put(
-                JSONObject().apply {
-                    put("id", it.id)
-                    put("code", it.code)
-                    put("bridge", it.bridge)
-                    put("aircraftClass", it.aircraftClass)
-                    put("minInterval", it.minInterval)
-                    put("openTime", it.openTime)
-                    put("closeTime", it.closeTime)
-                    put("status", it.status)
-                }
-            )
-        }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY, arr.toString())
-            .apply()
+        GateInfoRepository.replaceAll(context, rows)
     }
 
     // ---------------- 给分配引擎的入口 ----------------
@@ -175,6 +135,42 @@ object GateInfoStore {
     /** 全部机位（含维护 / 停用），供引擎排查或人工核对 */
     fun loadAllForEngine(context: Context): List<GateForEngine> =
         load(context).map { it.toEngine() }
+
+    // ---------------- 数据迁移（v3 -> v4） ----------------
+
+    /**
+     * 把 v3 写在 SharedPreferences 的机位 JSON 迁移到 SQLite 一次。
+     * 之后 GateInfoStore 不再读取 SharedPreferences。
+     */
+    private fun migrateFromPrefs(context: Context): List<GateInfoRow> {
+        return try {
+            val sp = context.getSharedPreferences("gate_info_prefs", Context.MODE_PRIVATE)
+            val raw = sp.getString("gate_rows", null)
+            if (raw.isNullOrEmpty()) return emptyList()
+            val arr = JSONArray(raw)
+        val out = mutableListOf<GateInfoRow>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            out += GateInfoRow(
+                id = o.optString("id", UUID.randomUUID().toString()),
+                code = o.optString("code", ""),
+                bridge = migrateBridge(
+                    o.optString("bridge", o.optString("standType", GateInfoOptions.BRIDGE))
+                ),
+                aircraftClass = o.optString("aircraftClass", ""),
+                minInterval = o.optInt("minInterval", GateInfoOptions.DEFAULT_INTERVAL),
+                openTime = o.optString("openTime", "06:00"),
+                closeTime = o.optString("closeTime", "23:00"),
+                status = migrateStatus(
+                    o.optString("status", GateInfoOptions.STATUS_AVAILABLE)
+                )
+            )
+        }
+        out
+    } catch (e: Exception) {
+        emptyList()
+    }
+}
 
     /** 旧版字段迁移：近机位 -> 廊桥 */
     private fun migrateBridge(raw: String): String = when (raw) {
