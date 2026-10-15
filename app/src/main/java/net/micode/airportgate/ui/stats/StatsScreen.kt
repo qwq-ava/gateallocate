@@ -39,6 +39,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import net.micode.airportgate.model.GateInfoStore
 import net.micode.airportgate.model.RegionStat
 import net.micode.airportgate.model.StatsData
 import net.micode.airportgate.ui.components.AppCard
@@ -57,38 +59,39 @@ fun StatsScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
     var tabIndex by remember { mutableIntStateOf(0) }
     val tabs = listOf("今日实时", "近 7 日", "本月")
 
+    // 机位构成与机位信息表联动：机位档案不随时间变化，三个页签共用同一份
+    val context = LocalContext.current
+    val gates = GateInfoStore.load(context)
+    val gateTotal = gates.size.coerceAtLeast(1)
+    val pctOf = { n: Int -> n * 100f / gateTotal }
+    val bridgeOk = gates.count { it.isBridge && it.available }
+    val bridgeBad = gates.count { it.isBridge && !it.available }
+    val remoteOk = gates.count { !it.isBridge && it.available }
+    val remoteBad = gates.count { !it.isBridge && !it.available }
+    val liveRegions = listOf(
+        RegionStat("廊桥机位 · 可用", "$bridgeOk 个 · 占 ${"%.1f".format(pctOf(bridgeOk))}%", pctOf(bridgeOk), Blue),
+        RegionStat("廊桥机位 · 维护停用", "$bridgeBad 个 · 占 ${"%.1f".format(pctOf(bridgeBad))}%", pctOf(bridgeBad), Color(0xFF8A9099)),
+        RegionStat("远机位 · 可用", "$remoteOk 个 · 占 ${"%.1f".format(pctOf(remoteOk))}%", pctOf(remoteOk), Green),
+        RegionStat("远机位 · 维护停用", "$remoteBad 个 · 占 ${"%.1f".format(pctOf(remoteBad))}%", pctOf(remoteBad), Orange)
+    )
+
     val statsData = listOf(
         StatsData(
             "78.4%", "较上一周期 +2.1%", "86.2%", "廊桥航班 247 / 286",
             "4.2 次/日", "行业均值 3.8 次/日", "08:00-10:00", "峰值利用率 94%",
-            listOf(
-                RegionStat("T1 廊桥机位", "28个机位 · 周转5.1次", 82.6f, Blue),
-                RegionStat("T2 廊桥机位", "24个机位 · 周转4.8次", 87.1f, Blue),
-                RegionStat("T1 远机位", "40个机位 · 周转3.4次", 64.3f, Color(0xFF8A9099)),
-                RegionStat("T2 远机位", "36个机位 · 周转3.1次", 61.8f, Orange)
-            ),
+            liveRegions,
             "远机位利用率低于65%，建议将部分窄体机航班改派廊桥以提升旅客体验"
         ),
         StatsData(
             "74.8%", "较上一周期 +1.2%", "83.5%", "廊桥航班 1592 / 1906",
             "4.0 次/日", "行业均值 3.8 次/日", "08:00-10:00", "峰值利用率 91%",
-            listOf(
-                RegionStat("T1 廊桥机位", "28个机位 · 周转4.9次", 79.8f, Blue),
-                RegionStat("T2 廊桥机位", "24个机位 · 周转4.6次", 83.2f, Blue),
-                RegionStat("T1 远机位", "40个机位 · 周转3.2次", 66.1f, Color(0xFF8A9099)),
-                RegionStat("T2 远机位", "36个机位 · 周转3.0次", 63.7f, Orange)
-            ),
+            liveRegions,
             "近 7 日整体利用率稳步上升，周末峰值略高于工作日"
         ),
         StatsData(
             "72.6%", "较上月 +0.8%", "81.9%", "廊桥航班 6424 / 7843",
             "3.9 次/日", "行业均值 3.8 次/日", "08:00-10:00", "峰值利用率 89%",
-            listOf(
-                RegionStat("T1 廊桥机位", "28个机位 · 周转4.7次", 77.5f, Blue),
-                RegionStat("T2 廊桥机位", "24个机位 · 周转4.4次", 81.3f, Blue),
-                RegionStat("T1 远机位", "40个机位 · 周转3.1次", 65.4f, Color(0xFF8A9099)),
-                RegionStat("T2 远机位", "36个机位 · 周转2.9次", 62.9f, Orange)
-            ),
+            liveRegions,
             "本月利用率整体平稳，建议关注 T2 远机位的低效使用情况"
         )
     )
