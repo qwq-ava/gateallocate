@@ -94,7 +94,7 @@ fun AppRoot() {
                 Screen.Import -> ImportScreen(onBack = { current = null }, showMsg = showMsg)
                 Screen.GateInfo -> GateInfoScreen(onBack = { current = null }, showMsg = showMsg)
                 Screen.Assign -> AssignScreen(onBack = { current = null })
-                Screen.Stats -> StatsScreen(onBack = { current = null }, showMsg = showMsg)
+                Screen.Stats -> StatsScreen(onBack = { current = null })
             }
         }
     }
