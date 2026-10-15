@@ -30,9 +30,10 @@ import androidx.compose.ui.Modifier
 import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import net.micode.airportgate.data.db.GateRepository
 import net.micode.airportgate.ui.assign.AssignScreen
 import net.micode.airportgate.ui.components.BottomNavBar
-import net.micode.airportgate.ui.gateinfo.GateInfoScreen
+import net.micode.airportgate.ui.gateinfo.GateInfoRoute
 import net.micode.airportgate.ui.home.HomeScreen
 import net.micode.airportgate.ui.import.ImportScreen
 import net.micode.airportgate.ui.stats.StatsScreen
@@ -51,6 +52,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // 启动时主动打开一次数据库：确保建表与版本迁移完成
+        // 在任何界面（尤其是分配引擎）读数据之前就已经完成
+        GateRepository.tableSizes(this)
         setContent {
             AirportGateAppTheme {
                 AppRoot()
@@ -92,7 +96,7 @@ fun AppRoot() {
                     showMsg = showMsg
                 )
                 Screen.Import -> ImportScreen(onBack = { current = null }, showMsg = showMsg)
-                Screen.GateInfo -> GateInfoScreen(onBack = { current = null }, showMsg = showMsg)
+                Screen.GateInfo -> GateInfoRoute(onBack = { current = null }, showMsg = showMsg)
                 Screen.Assign -> AssignScreen(onBack = { current = null })
                 Screen.Stats -> StatsScreen(onBack = { current = null })
             }

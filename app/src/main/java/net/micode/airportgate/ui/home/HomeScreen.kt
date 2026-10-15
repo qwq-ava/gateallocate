@@ -24,8 +24,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import net.micode.airportgate.Screen
 import net.micode.airportgate.model.FlightItem
+import net.micode.airportgate.model.GateInfoStore
 import net.micode.airportgate.ui.components.AppCard
 import net.micode.airportgate.ui.components.FlightRow
 import net.micode.airportgate.ui.components.SectionTitle
@@ -39,6 +41,14 @@ import net.micode.airportgate.ui.theme.TextSub
 
 @Composable
 fun HomeScreen(onNavigate: (Screen) -> Unit, showMsg: (String) -> Unit) {
+    // 与机位信息表联动：每次进入首页重新读一次，改完机位回来即可看到新数字
+    val context = LocalContext.current
+    val gates = GateInfoStore.load(context)
+    val gateTotal = gates.size
+    val gateAvailable = gates.count { it.available }
+    val bridgeAvailable = gates.count { it.available && it.isBridge }
+    val remoteAvailable = gates.count { it.available && !it.isBridge }
+
     val homeFlights = listOf(
         FlightItem("09:42", "MU5137", "上海浦东", "广州白云", "208", "廊桥 · 预计靠桥 10:20", "已分配"),
         FlightItem("09:35", "CA1856", "上海浦东", "北京首都", "B27", "廊桥 · 机型 A330-300", "已分配"),
@@ -96,12 +106,12 @@ fun HomeScreen(onNavigate: (Screen) -> Unit, showMsg: (String) -> Unit) {
                     Text("可用机位", fontSize = 13.sp, color = TextSub)
                     Spacer(Modifier.height(6.dp))
                     Row(verticalAlignment = Alignment.Bottom) {
-                        Text("62", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = TextMain)
+                        Text("$gateAvailable", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = TextMain)
                         Spacer(Modifier.width(4.dp))
-                        Text("/ 128", fontSize = 14.sp, color = TextSub)
+                        Text("/ $gateTotal", fontSize = 14.sp, color = TextSub)
                     }
                     Spacer(Modifier.height(6.dp))
-                    Text("廊桥 28 · 远机位 34", fontSize = 12.sp, color = TextSub)
+                    Text("廊桥 $bridgeAvailable · 远机位 $remoteAvailable", fontSize = 12.sp, color = TextSub)
                 }
             }
 
