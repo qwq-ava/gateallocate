@@ -17,14 +17,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Autorenew
 import androidx.compose.material.icons.outlined.Link
-import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -53,7 +49,7 @@ import net.micode.airportgate.ui.theme.TextSub
 // ========================= 统计利用率 =========================
 
 @Composable
-fun StatsScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
+fun StatsScreen(onBack: () -> Unit) {
     var tabIndex by remember { mutableIntStateOf(0) }
     val tabs = listOf("今日实时", "近 7 日", "本月")
 
@@ -97,12 +93,7 @@ fun StatsScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
     Column(Modifier.fillMaxSize()) {
         SubTopBar(
             "统计利用率",
-            onBack,
-            action = {
-                IconButton(onClick = { showMsg("统计报告已导出") }) {
-                    Icon(Icons.Outlined.Share, contentDescription = "导出", tint = TextMain)
-                }
-            }
+            onBack
         )
         Column(
             Modifier
@@ -139,7 +130,7 @@ fun StatsScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
             }
 
             Spacer(Modifier.height(14.dp))
-            // ---- 四个指标卡 ----
+            // ---- 指标卡 ----
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 AppCard(Modifier.weight(1f)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -162,38 +153,6 @@ fun StatsScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
                     Text(data.bridgeDetail, fontSize = 11.sp, color = TextSub)
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                AppCard(Modifier.weight(1f)) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("日均周转", fontSize = 12.sp, color = TextSub, modifier = Modifier.weight(1f))
-                        Icon(Icons.Outlined.Autorenew, null, tint = Blue, modifier = Modifier.size(14.dp))
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Text(data.turnover, fontSize = 26.sp, fontWeight = FontWeight.Bold, color = TextMain)
-                    Spacer(Modifier.height(6.dp))
-                    Text(data.industryAvg, fontSize = 11.sp, color = TextSub)
-                }
-                // 高峰时段卡片：橙色描边
-                Surface(
-                    modifier = Modifier.weight(1f),
-                    color = Color.White,
-                    shape = RoundedCornerShape(12.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Orange)
-                ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("高峰时段", fontSize = 12.sp, color = TextSub, modifier = Modifier.weight(1f))
-                            Icon(Icons.Outlined.Warning, null, tint = Orange, modifier = Modifier.size(14.dp))
-                        }
-                        Spacer(Modifier.height(6.dp))
-                        Text(data.peak, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Orange)
-                        Spacer(Modifier.height(6.dp))
-                        Text(data.peakUtil, fontSize = 11.sp, color = Orange)
-                    }
-                }
-            }
-
             Spacer(Modifier.height(18.dp))
             // ---- 机位区域利用率 ----
             AppCard {
