@@ -40,9 +40,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import net.micode.airportgate.model.RegionStat
 import net.micode.airportgate.model.StatsData
-import net.micode.airportgate.stats.GateUtilizationCalculator
-import net.micode.airportgate.stats.SqliteStatsDataSource
-import net.micode.airportgate.stats.UtilizationResult
+import net.micode.airportgate.domain.StatsService
+import net.micode.airportgate.domain.stats.UtilizationResult
 import net.micode.airportgate.ui.components.AppCard
 import net.micode.airportgate.ui.components.SubTopBar
 import net.micode.airportgate.ui.theme.Blue
@@ -50,7 +49,6 @@ import net.micode.airportgate.ui.theme.Green
 import net.micode.airportgate.ui.theme.Orange
 import net.micode.airportgate.ui.theme.TextMain
 import net.micode.airportgate.ui.theme.TextSub
-import java.util.Calendar
 
 // ========================= 统计利用率（真实数据版） =========================
 //
@@ -68,9 +66,8 @@ fun StatsScreen(onBack: () -> Unit) {
     var result by remember { mutableStateOf<UtilizationResult?>(null) }
 
     LaunchedEffect(tabIndex) {
-        val ds = SqliteStatsDataSource(context)
-        val (start, end) = windowFor(tabIndex)
-        result = GateUtilizationCalculator.compute(start, end, ds)
+        // 业务逻辑交由 domain.StatsService 执行（算窗口 -> 调计算模块）
+        result = StatsService.computeStats(context, tabIndex)
     }
 
     val data = result?.toStatsData() ?: StatsData(
@@ -216,23 +213,7 @@ fun StatsScreen(onBack: () -> Unit) {
     }
 }
 
-/** 根据页签返回统计窗口 [start, end]（epoch 毫秒）：今日 / 近 7 日 / 本月 */
-private fun windowFor(tab: Int): Pair<Long, Long> {
-    val cal = Calendar.getInstance()
-    val end = cal.timeInMillis
-    cal.set(Calendar.HOUR_OF_DAY, 0)
-    cal.set(Calendar.MINUTE, 0)
-    cal.set(Calendar.SECOND, 0)
-    cal.set(Calendar.MILLISECOND, 0)
-    val start = when (tab) {
-        1 -> { cal.add(Calendar.DAY_OF_MONTH, -6); cal.timeInMillis } // 近 7 日（含今天）
-        2 -> { cal.set(Calendar.DAY_OF_MONTH, 1); cal.timeInMillis }   // 本月 1 号起
-        else -> cal.timeInMillis                                              // 今日 00:00 起
-    }
-    return start to end
-}
-
-/** 把计算结果映射成界面用的 StatsData（计算模块只产出使用率/靠桥率/分区域，其余字段如实填充） */
+/** 把计算结果映射成界面用的 StatsData（展示映射留在界面层：含主题色，避免 domain 反向依赖 ui） */
 private fun UtilizationResult.toStatsData(): StatsData {
     val maxUtil = regions.maxOfOrNull { it.utilization } ?: 0.0
     val remote = regions.firstOrNull { it.name != "廊桥" }

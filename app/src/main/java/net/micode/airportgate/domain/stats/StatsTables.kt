@@ -1,4 +1,4 @@
-package net.micode.airportgate.stats
+package net.micode.airportgate.domain.stats
 
 import net.micode.airportgate.model.GateInfoRow
 

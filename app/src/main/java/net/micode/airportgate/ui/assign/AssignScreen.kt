@@ -37,17 +37,11 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
-import net.micode.airportgate.data.db.GateRepository
-import net.micode.airportgate.engine.reallocateAll
-import net.micode.airportgate.engine.toAssignmentRows
-import net.micode.airportgate.engine.toUsageRows
+import net.micode.airportgate.domain.AllocationService
 import net.micode.airportgate.model.DayFlight
 import net.micode.airportgate.model.DataSync
 import net.micode.airportgate.model.GateSlot
-import net.micode.airportgate.model.GateInfoStore
 import net.micode.airportgate.model.dateOf
 import net.micode.airportgate.model.dayFlightToItem
 import net.micode.airportgate.model.dayFlightToSlot
@@ -92,46 +86,13 @@ fun AssignScreen(onBack: () -> Unit) {
     LaunchedEffect(dataVersion) {
         allocating = true
         try {
-            // 数据源：t_flight（航班）+ t_gate（机位，经 GateInfoStore 读取）
-            val drafts = GateRepository.loadFlights(context, today)
-                .filter { it.valid && it.status != "已取消" }
-            val gates = GateInfoStore.loadAvailableForEngine(context)
-            gateCodes = gates.map { it.code }
-            if (drafts.isEmpty() || gates.isEmpty()) {
-                currentFlights = emptyList()
-                lastFailed = emptyList()
-                return@LaunchedEffect
-            }
-            val (newFlights, result) = withContext(Dispatchers.Default) {
-                reallocateAll(drafts, gates)
-            }
+            // 业务逻辑交由 domain.AllocationService 执行：
+            // 读取航班+机位 -> 引擎分配 -> 落库 t_assignment/t_gate_usage -> 回写航班
+            val res = AllocationService.allocate(context, today)
             delay(300) // 让「分配中」状态可见
-            currentFlights = newFlights
-            lastFailed = result.failedFlightNos
-
-            // ---- 分配结果落库 ----
-            // 1) 先清当天旧结果，避免重复堆积
-            GateRepository.clearDayResults(context, today)
-            // 2) 写入 t_assignment / t_gate_usage
-            val assignmentRows = toAssignmentRows(result, today, drafts)
-            val usageRows = toUsageRows(result, today, drafts)
-            assignmentRows.forEach { a ->
-                GateRepository.addAssignment(
-                    context, today, a.flightNo, a.gateNo, a.aircraft, a.direction,
-                    a.planStart, a.planEnd, a.isBridge, a.assignType, a.operator, a.conflict, a.version
-                )
-            }
-            usageRows.forEach { u ->
-                GateRepository.addUsage(
-                    context, u.date, u.gateNo, u.flightNo, u.region, u.isBridge, u.needBus,
-                    u.planStart, u.planEnd, u.actualStart, u.actualEnd, u.occupyMinutes
-                )
-            }
-            // 3) 回写航班：机位编号 + 状态（待分配 -> 已分配）
-            drafts.forEach { f ->
-                val a = result.assignments.firstOrNull { it.flightNo == f.flightNo }
-                if (a != null) GateRepository.markFlightAssigned(context, f.id, a.gate)
-            }
+            currentFlights = res.flights
+            gateCodes = res.gateCodes
+            lastFailed = res.failedFlightNos
         } finally {
             allocating = false
         }

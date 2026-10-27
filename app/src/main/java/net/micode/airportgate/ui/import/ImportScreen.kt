@@ -39,7 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import net.micode.airportgate.data.db.GateRepository
-import net.micode.airportgate.model.DataSync
+import net.micode.airportgate.domain.ImportService
 import net.micode.airportgate.model.FlightDraft
 import net.micode.airportgate.model.ImportRecord
 import net.micode.airportgate.model.dateOf
@@ -109,22 +109,17 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
             rowsTomorrow = rowsTomorrow,
             onBack = { formMode = null },
             onSubmit = { date, rows ->
-                val valid = rows.filter { it.valid }
-                val skipped = rows.size - valid.size
-                val source = if (mode == FlightFormMode.CREATE) "手工录入" else "信息更改"
-                val n = GateRepository.saveFlights(
-                    context, date, valid,
-                    source = source
+                // 业务逻辑交由 domain.ImportService 执行：
+                // 校验 -> 落库航班 -> 写批次记录 -> 触发分配重排
+                val res = ImportService.submit(
+                    context, date, rows,
+                    isCreate = mode == FlightFormMode.CREATE
                 )
                 showMsg(
-                    "$date 已保存 $n 条" +
-                        (if (skipped > 0) "，$skipped 条信息不完整未保存" else "")
+                    "$date 已保存 ${res.savedCount} 条" +
+                        (if (res.skippedCount > 0) "，${res.skippedCount} 条信息不完整未保存" else "")
                 )
-                // 写入真实导入批次记录（时间 / 来源 / 条数 / 操作人），取代写死演示数据
-                GateRepository.addImportBatch(context, date, source, rows.size, n, skipped)
                 importRefresh++
-                // 航班数据已变更，触发分配界面自动重排
-                DataSync.bump()
                 formMode = null
             }
         )

@@ -1,4 +1,4 @@
-package net.micode.airportgate.stats
+package net.micode.airportgate.domain.stats
 
 import kotlin.math.max
 import kotlin.math.min

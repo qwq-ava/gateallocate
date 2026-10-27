@@ -24,3 +24,10 @@ build/
 app/release/
 /.idea/
 .workbuddy/
+
+# 本地文档产物 / 临时提取文件（不入库，避免 git add -A 误提交）
+spec_text.txt
+4.4部署设计_修正版.md
+实体类图_FlightDraft.svg
+边界类图_修正版.svg
+部署图_修正版.svg

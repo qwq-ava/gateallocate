@@ -1,4 +1,4 @@
-package net.micode.airportgate.stats
+package net.micode.airportgate.domain.stats
 
 import android.content.Context
 import android.database.Cursor
