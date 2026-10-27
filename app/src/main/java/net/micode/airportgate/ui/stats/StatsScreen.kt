@@ -23,81 +23,71 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.platform.LocalContext
-import net.micode.airportgate.model.GateInfoStore
 import net.micode.airportgate.model.RegionStat
 import net.micode.airportgate.model.StatsData
+import net.micode.airportgate.stats.GateUtilizationCalculator
+import net.micode.airportgate.stats.SqliteStatsDataSource
+import net.micode.airportgate.stats.UtilizationResult
 import net.micode.airportgate.ui.components.AppCard
-import net.micode.airportgate.ui.components.SectionTitle
 import net.micode.airportgate.ui.components.SubTopBar
 import net.micode.airportgate.ui.theme.Blue
 import net.micode.airportgate.ui.theme.Green
 import net.micode.airportgate.ui.theme.Orange
 import net.micode.airportgate.ui.theme.TextMain
 import net.micode.airportgate.ui.theme.TextSub
+import java.util.Calendar
 
-// ========================= 统计利用率 =========================
+// ========================= 统计利用率（真实数据版） =========================
+//
+// 不再写死数字，而是从 allocation-module 的 SQLite 读取「机位/航班/分配/占用」四张表，
+// 交给 stats.GateUtilizationCalculator 算出真实的使用率 / 靠桥率 / 分区域利用率，
+// 再映射成界面用的 StatsData / RegionStat。
 
 @Composable
 fun StatsScreen(onBack: () -> Unit) {
     var tabIndex by remember { mutableIntStateOf(0) }
     val tabs = listOf("今日实时", "近 7 日", "本月")
-
-    // 机位构成与机位信息表联动：机位档案不随时间变化，三个页签共用同一份
     val context = LocalContext.current
-    val gates = GateInfoStore.load(context)
-    val gateTotal = gates.size.coerceAtLeast(1)
-    val pctOf = { n: Int -> n * 100f / gateTotal }
-    val bridgeOk = gates.count { it.isBridge && it.available }
-    val bridgeBad = gates.count { it.isBridge && !it.available }
-    val remoteOk = gates.count { !it.isBridge && it.available }
-    val remoteBad = gates.count { !it.isBridge && !it.available }
-    val liveRegions = listOf(
-        RegionStat("廊桥机位 · 可用", "$bridgeOk 个 · 占 ${"%.1f".format(pctOf(bridgeOk))}%", pctOf(bridgeOk), Blue),
-        RegionStat("廊桥机位 · 维护停用", "$bridgeBad 个 · 占 ${"%.1f".format(pctOf(bridgeBad))}%", pctOf(bridgeBad), Color(0xFF8A9099)),
-        RegionStat("远机位 · 可用", "$remoteOk 个 · 占 ${"%.1f".format(pctOf(remoteOk))}%", pctOf(remoteOk), Green),
-        RegionStat("远机位 · 维护停用", "$remoteBad 个 · 占 ${"%.1f".format(pctOf(remoteBad))}%", pctOf(remoteBad), Orange)
-    )
 
-    val statsData = listOf(
-        StatsData(
-            "78.4%", "较上一周期 +2.1%", "86.2%", "廊桥航班 247 / 286",
-            "4.2 次/日", "行业均值 3.8 次/日", "08:00-10:00", "峰值利用率 94%",
-            liveRegions,
-            "远机位利用率低于65%，建议将部分窄体机航班改派廊桥以提升旅客体验"
-        ),
-        StatsData(
-            "74.8%", "较上一周期 +1.2%", "83.5%", "廊桥航班 1592 / 1906",
-            "4.0 次/日", "行业均值 3.8 次/日", "08:00-10:00", "峰值利用率 91%",
-            liveRegions,
-            "近 7 日整体利用率稳步上升，周末峰值略高于工作日"
-        ),
-        StatsData(
-            "72.6%", "较上月 +0.8%", "81.9%", "廊桥航班 6424 / 7843",
-            "3.9 次/日", "行业均值 3.8 次/日", "08:00-10:00", "峰值利用率 89%",
-            liveRegions,
-            "本月利用率整体平稳，建议关注 T2 远机位的低效使用情况"
-        )
+    // 计算结果（数据库异步读取，先空着，读到了再刷新界面）
+    var result by remember { mutableStateOf<UtilizationResult?>(null) }
+
+    LaunchedEffect(tabIndex) {
+        val ds = SqliteStatsDataSource(context)
+        val (start, end) = windowFor(tabIndex)
+        result = GateUtilizationCalculator.compute(start, end, ds)
+    }
+
+    val data = result?.toStatsData() ?: StatsData(
+        avgUtil = "—",
+        avgDelta = "计算中…",
+        bridgeRate = "—",
+        bridgeDetail = "正在读取数据库",
+        turnover = "—",
+        industryAvg = "行业均值 3.8 次/日",
+        peak = "—",
+        peakUtil = "—",
+        regions = emptyList(),
+        warning = "正在从 SQLite 读取真实占用数据…"
     )
-    val data = statsData[tabIndex]
 
     Column(Modifier.fillMaxSize()) {
-        SubTopBar(
-            "统计利用率",
-            onBack
-        )
+        SubTopBar("统计利用率", onBack)
         Column(
             Modifier
                 .weight(1f)
@@ -167,45 +157,49 @@ fun StatsScreen(onBack: () -> Unit) {
                         color = TextMain,
                         modifier = Modifier.weight(1f)
                     )
-                    Text("今日 00:00 - 09:45", fontSize = 12.sp, color = TextSub)
+                    Text("当前统计窗口内", fontSize = 12.sp, color = TextSub)
                 }
                 Spacer(Modifier.height(14.dp))
-                data.regions.forEach { region ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(region.name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextMain)
-                            Spacer(Modifier.height(2.dp))
-                            Text(region.sub, fontSize = 12.sp, color = TextSub)
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        // 进度条
-                        Box(
-                            Modifier
-                                .width(90.dp)
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(Color(0xFFEDEEF0))
+                if (data.regions.isEmpty()) {
+                    Text("暂无数据", fontSize = 13.sp, color = TextSub)
+                } else {
+                    data.regions.forEach { region ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(region.name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextMain)
+                                Spacer(Modifier.height(2.dp))
+                                Text(region.sub, fontSize = 12.sp, color = TextSub)
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            // 进度条
                             Box(
                                 Modifier
-                                    .fillMaxWidth(region.pct / 100f)
+                                    .width(90.dp)
                                     .height(6.dp)
                                     .clip(RoundedCornerShape(3.dp))
-                                    .background(region.color)
+                                    .background(Color(0xFFEDEEF0))
+                            ) {
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth((region.pct / 100f).coerceIn(0f, 1f))
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(region.color)
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "${region.pct}%",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = region.color,
+                                modifier = Modifier.width(48.dp),
+                                textAlign = TextAlign.End
                             )
                         }
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "${region.pct}%",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = region.color,
-                            modifier = Modifier.width(48.dp),
-                            textAlign = TextAlign.End
-                        )
                     }
                 }
                 Spacer(Modifier.height(10.dp))
@@ -220,4 +214,54 @@ fun StatsScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(20.dp))
         }
     }
+}
+
+/** 根据页签返回统计窗口 [start, end]（epoch 毫秒）：今日 / 近 7 日 / 本月 */
+private fun windowFor(tab: Int): Pair<Long, Long> {
+    val cal = Calendar.getInstance()
+    val end = cal.timeInMillis
+    cal.set(Calendar.HOUR_OF_DAY, 0)
+    cal.set(Calendar.MINUTE, 0)
+    cal.set(Calendar.SECOND, 0)
+    cal.set(Calendar.MILLISECOND, 0)
+    val start = when (tab) {
+        1 -> { cal.add(Calendar.DAY_OF_MONTH, -6); cal.timeInMillis } // 近 7 日（含今天）
+        2 -> { cal.set(Calendar.DAY_OF_MONTH, 1); cal.timeInMillis }   // 本月 1 号起
+        else -> cal.timeInMillis                                              // 今日 00:00 起
+    }
+    return start to end
+}
+
+/** 把计算结果映射成界面用的 StatsData（计算模块只产出使用率/靠桥率/分区域，其余字段如实填充） */
+private fun UtilizationResult.toStatsData(): StatsData {
+    val maxUtil = regions.maxOfOrNull { it.utilization } ?: 0.0
+    val remote = regions.firstOrNull { it.name != "廊桥" }
+    val regionsUi = regions.map { r ->
+        val isBridge = r.name == "廊桥"
+        RegionStat(
+            name = if (isBridge) "廊桥机位" else "远机位",
+            sub = "${r.gateCount}个开放机位 · 利用率 ${"%.1f".format(r.utilization)}%",
+            pct = r.utilization.toFloat().coerceIn(0f, 100f),
+            color = if (isBridge) Blue else Green
+        )
+    }
+    val warning = when {
+        remote != null && remote.utilization < 65.0 ->
+            "远机位利用率低于65%，建议将部分窄体机航班改派廊桥以提升旅客体验"
+        avgUtilization >= 80.0 ->
+            "整体利用率较高，请关注机位周转与冲突情况"
+        else -> "各区域利用率均衡，运行平稳"
+    }
+    return StatsData(
+        avgUtil = "%.1f%%".format(avgUtilization),
+        avgDelta = "数据库实时计算",
+        bridgeRate = "%.1f%%".format(bridgeRate),
+        bridgeDetail = "靠桥率 %.1f%%".format(bridgeRate),
+        turnover = "—",
+        industryAvg = "行业均值 3.8 次/日",
+        peak = "—",
+        peakUtil = "峰值 %.1f%%".format(maxUtil),
+        regions = regionsUi,
+        warning = warning
+    )
 }
