@@ -6,9 +6,11 @@ import android.database.SQLException
 import android.database.sqlite.SQLiteDatabase
 import net.micode.airportgate.model.FlightDraft
 import net.micode.airportgate.model.GateInfoStore
+import net.micode.airportgate.model.ImportRecord
 import net.micode.airportgate.model.minutesToTime
 import net.micode.airportgate.model.timeToMinutes
 import net.micode.airportgate.model.timestampNow
+import net.micode.airportgate.model.dateOf
 
 // ========================= 数据访问层 =========================
 //
@@ -39,6 +41,16 @@ data class RegionUsage(
     val flightCount: Int,
     val occupyMinutes: Int,
     val util: Float // 0f ~ 1f
+)
+
+/** 某日期区间的机位运行聚合（航班数 / 靠桥数 / 占用总分钟），按区间天数折算利用率与周转 */
+data class RangeUsageStat(
+    val flightCount: Int,       // 计入统计的航班数
+    val bridgeCount: Int,       // 靠桥航班数
+    val occupyMinutes: Int,     // 总占用时长（分钟）
+    val bridgeRate: Float,      // 靠桥率 = 靠桥航班 / 总航班
+    val avgUtil: Float,         // 平均机位利用率 = 占用总分钟 / (机位数 × 窗口 × 天数)
+    val turnover: Float         // 日均周转 = 航班数 / (机位数 × 天数)
 )
 
 /** 某一天的机位运行统计 */
@@ -306,6 +318,80 @@ object GateRepository {
         arrayOf(date)
     )
 
+    // ---------------- 4. 导入批次记录表 ----------------
+
+    /**
+     * 写入一条导入批次记录（每次「数据导入 / 航班信息更改」提交成功后调用）。
+     *
+     * @param flightDate 本次所操作的航班日期
+     * @param source     来源：手工录入 / 信息更改
+     * @param total      本次提交的航班条数（含信息不完整）
+     * @param success    成功写入 t_flight 的条数
+     * @param failed     未写入条数（信息不完整被跳过）
+     * @param operator   操作人（单用户无登录，统一记「现场录入」，接登录后替换）
+     */
+    fun addImportBatch(
+        context: Context,
+        flightDate: String,
+        source: String,
+        total: Int,
+        success: Int,
+        failed: Int,
+        operator: String = "现场录入"
+    ): Long {
+        val b = GateDbContract.ImportBatch
+        val now = timestampNow()
+        val cv = ContentValues().apply {
+            put(b.C_BATCH_TIME, now)
+            put(b.C_SOURCE, source)
+            put(b.C_FLIGHT_DATE, flightDate)
+            put(b.C_TOTAL, total)
+            put(b.C_SUCCESS, success)
+            put(b.C_FAILED, failed)
+            put(b.C_OPERATOR, operator)
+            put(b.C_CREATED, now)
+        }
+        return db(context).insert(b.TABLE, null, cv)
+    }
+
+    /**
+     * 读取最近 [days] 天的导入批次记录（按完成时刻倒序），映射成导入页展示用的 ImportRecord。
+     * 取代原先写死的演示数据。
+     */
+    fun loadImportBatches(context: Context, days: Int = 30): List<ImportRecord> {
+        val b = GateDbContract.ImportBatch
+        // batch_time 是 yyyy-MM-dd HH:mm:ss，字典序与时间序一致，可直接字符串比较
+        val cutoff = dateOf(-days) + " 00:00:00"
+        val list = mutableListOf<ImportRecord>()
+        val c = db(context).rawQuery(
+            "SELECT ${b.C_BATCH_TIME}, ${b.C_SOURCE}, ${b.C_FLIGHT_DATE}, " +
+                "${b.C_TOTAL}, ${b.C_SUCCESS}, ${b.C_FAILED}, ${b.C_OPERATOR} " +
+                "FROM ${b.TABLE} WHERE ${b.C_BATCH_TIME} >= ? ORDER BY ${b.C_BATCH_TIME} DESC",
+            arrayOf(cutoff)
+        )
+        c.use {
+            while (it.moveToNext()) {
+                val bt = it.getString(0) ?: ""
+                val source = it.getString(1) ?: ""
+                val fdate = it.getString(2) ?: ""
+                val total = it.getInt(3)
+                val success = it.getInt(4)
+                val failed = it.getInt(5)
+                val operator = it.getString(6) ?: ""
+                list.add(
+                    ImportRecord(
+                        fileName = "$source（$fdate）",
+                        status = if (failed > 0) "部分失败" else "导入成功",
+                        time = if (bt.length >= 16) bt.substring(0, 16) else bt,
+                        operator = operator,
+                        summary = "共 $total 条，成功 $success 条，失败 $failed 条"
+                    )
+                )
+            }
+        }
+        return list
+    }
+
     // ---------------- 统计：靠桥率 / 平均机位利用率 / 机位区域利用率 ----------------
 
     /**
@@ -340,6 +426,47 @@ object GateRepository {
             bridgeRate = if (flights == 0) 0f else bridges.toFloat() / flights,
             avgUtil = (minutes.toFloat() / (gates * windowMinutes)).coerceIn(0f, 1f),
             turnover = flights.toFloat() / gates
+        )
+    }
+
+    /**
+     * 某日期区间 [startDate, endDate] 的机位运行聚合（航班数 / 靠桥数 / 占用总分钟），
+     * 按区间天数 [days] 折算平均利用率与日均周转。统计页「近 7 日 / 本月」即调用本方法。
+     *
+     * 数据源：t_gate_usage（需先在分配页执行过一键分配才会写入占用记录）。
+     */
+    fun rangeStat(
+        context: Context,
+        startDate: String,
+        endDate: String,
+        days: Int,
+        windowMinutes: Int = 24 * 60
+    ): RangeUsageStat {
+        val u = GateDbContract.Usage
+        var flights = 0
+        var bridges = 0
+        var minutes = 0
+        val c = db(context).rawQuery(
+            "SELECT COUNT(*), SUM(${u.C_IS_BRIDGE}), SUM(${u.C_OCCUPY_MIN}) " +
+                "FROM ${u.TABLE} WHERE ${u.C_FLIGHT_DATE} BETWEEN ? AND ? AND ${u.C_STATUS}<>'已取消'",
+            arrayOf(startDate, endDate)
+        )
+        c.use {
+            if (it.moveToFirst()) {
+                flights = it.getInt(0)
+                bridges = it.getInt(1)
+                minutes = it.getInt(2)
+            }
+        }
+        val gates = GateInfoStore.load(context).size.coerceAtLeast(1)
+        val d = days.coerceAtLeast(1)
+        return RangeUsageStat(
+            flightCount = flights,
+            bridgeCount = bridges,
+            occupyMinutes = minutes,
+            bridgeRate = if (flights == 0) 0f else bridges.toFloat() / flights,
+            avgUtil = (minutes.toFloat() / (gates * windowMinutes * d)).coerceIn(0f, 1f),
+            turnover = flights.toFloat() / (gates * d)
         )
     }
 
