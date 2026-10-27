@@ -5,11 +5,12 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 // ========================= 数据库建表 =========================
 //
-// 共 4 张业务表：
-//   1. t_flight      航班信息表（导入 / 手工录入的原始航班计划）
-//   2. t_gate        机位信息表（机位档案，v4 起回归 SQLite，由机位维护模块维护）
-//   3. t_gate_usage  机位使用记录表（一次占用一条，统计靠桥率 / 利用率的数据源）
-//   4. t_assignment  机位分配结果表（分配方案的落库结果，可回溯）
+// 共 5 张业务表：
+//   1. t_flight        航班信息表（导入 / 手工录入的原始航班计划）
+//   2. t_gate          机位信息表（机位档案，v4 起回归 SQLite，由机位维护模块维护）
+//   3. t_gate_usage    机位使用记录表（一次占用一条，统计靠桥率 / 利用率的数据源）
+//   4. t_assignment    机位分配结果表（分配方案的落库结果，可回溯）
+//   5. t_import_batch  导入批次记录表（每次手工录入 / 信息更改的真实批次：时间 / 来源 / 条数 / 操作人）
 //
 // 机位档案（t_gate）v3 一度改用 SharedPreferences 存储，v4 起回归 SQLite，
 // 由 data.db.GateInfoRepository 负责读写，对上层（机位维护 / 分配 / 统计）透明。
@@ -21,7 +22,7 @@ import android.database.sqlite.SQLiteOpenHelper
 object GateDbContract {
 
     const val DB_NAME = "airport_gate.db"
-    const val DB_VERSION = 4   // v4：t_gate 回归 SQLite（机位档案由机位维护模块维护，仍走数据库）
+    const val DB_VERSION = 5   // v5：新增 t_import_batch 导入批次记录表（记录每次录入/更改的真实批次）
 
     /** 数据保留策略（天）；-1 表示永久保留 */
     object Retention {
@@ -113,6 +114,24 @@ object GateDbContract {
         const val C_STATUS = "status"               // 已分配 / 已执行 / 已取消
         const val C_VERSION = "version"             // 版本号，改派时 +1
         const val C_REMARK = "remark"
+        const val C_CREATED = "created_at"
+    }
+
+    // ---------------- 4. 导入批次记录表 ----------------
+    //
+    // 记录每一次「数据导入 / 航班信息更改」的真实批次：完成时刻、来源、所操作日期、
+    // 本次提交条数 / 成功条数 / 未写入条数、操作人。导入页「最近导入记录」即从本表读取，
+    // 取代原先写死的演示数据。
+    object ImportBatch {
+        const val TABLE = "t_import_batch"
+        const val C_ID = "_id"
+        const val C_BATCH_TIME = "batch_time"   // 导入完成时刻 yyyy-MM-dd HH:mm:ss（排序 / 展示用）
+        const val C_SOURCE = "source"           // 来源：手工录入 / 信息更改
+        const val C_FLIGHT_DATE = "flight_date" // 本次所操作的航班日期 yyyy-MM-dd
+        const val C_TOTAL = "total_count"       // 本次提交的航班条数（含信息不完整）
+        const val C_SUCCESS = "success_count"   // 成功写入 t_flight 的条数
+        const val C_FAILED = "failed_count"     // 未写入条数（信息不完整被跳过）
+        const val C_OPERATOR = "operator"       // 操作人（单用户无登录，统一记「现场录入」，接登录后替换）
         const val C_CREATED = "created_at"
     }
 }
@@ -227,6 +246,25 @@ class GateDbHelper private constructor(context: Context) :
         )
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_assign_date ON ${a.TABLE}(${a.C_FLIGHT_DATE})")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_assign_gate ON ${a.TABLE}(${a.C_GATE_NO})")
+
+        // 导入批次记录表（v5 新增）
+        val ib = GateDbContract.ImportBatch
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS ${ib.TABLE} (
+                ${ib.C_ID} INTEGER PRIMARY KEY AUTOINCREMENT,
+                ${ib.C_BATCH_TIME} TEXT NOT NULL,
+                ${ib.C_SOURCE} TEXT NOT NULL,
+                ${ib.C_FLIGHT_DATE} TEXT NOT NULL,
+                ${ib.C_TOTAL} INTEGER DEFAULT 0,
+                ${ib.C_SUCCESS} INTEGER DEFAULT 0,
+                ${ib.C_FAILED} INTEGER DEFAULT 0,
+                ${ib.C_OPERATOR} TEXT,
+                ${ib.C_CREATED} TEXT
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_batch_time ON ${ib.TABLE}(${ib.C_BATCH_TIME})")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -283,6 +321,27 @@ class GateDbHelper private constructor(context: Context) :
                 """.trimIndent()
             )
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_gate_code ON ${g.TABLE}(${g.C_CODE})")
+        }
+
+        if (oldVersion < 5) {
+            // v5：新增导入批次记录表 t_import_batch（记录每次录入 / 更改的真实批次）
+            val ib = GateDbContract.ImportBatch
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS ${ib.TABLE} (
+                    ${ib.C_ID} INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ${ib.C_BATCH_TIME} TEXT NOT NULL,
+                    ${ib.C_SOURCE} TEXT NOT NULL,
+                    ${ib.C_FLIGHT_DATE} TEXT NOT NULL,
+                    ${ib.C_TOTAL} INTEGER DEFAULT 0,
+                    ${ib.C_SUCCESS} INTEGER DEFAULT 0,
+                    ${ib.C_FAILED} INTEGER DEFAULT 0,
+                    ${ib.C_OPERATOR} TEXT,
+                    ${ib.C_CREATED} TEXT
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_batch_time ON ${ib.TABLE}(${ib.C_BATCH_TIME})")
         }
     }
 

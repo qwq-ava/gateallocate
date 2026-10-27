@@ -36,6 +36,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
+import android.content.Context
+import java.util.Calendar
+import net.micode.airportgate.data.db.GateRepository
 import net.micode.airportgate.model.GateInfoStore
 import net.micode.airportgate.model.RegionStat
 import net.micode.airportgate.model.StatsData
@@ -71,27 +74,9 @@ fun StatsScreen(onBack: () -> Unit) {
         RegionStat("远机位 · 维护停用", "$remoteBad 个 · 占 ${"%.1f".format(pctOf(remoteBad))}%", pctOf(remoteBad), Orange)
     )
 
-    val statsData = listOf(
-        StatsData(
-            "78.4%", "较上一周期 +2.1%", "86.2%", "廊桥航班 247 / 286",
-            "4.2 次/日", "行业均值 3.8 次/日", "08:00-10:00", "峰值利用率 94%",
-            liveRegions,
-            "远机位利用率低于65%，建议将部分窄体机航班改派廊桥以提升旅客体验"
-        ),
-        StatsData(
-            "74.8%", "较上一周期 +1.2%", "83.5%", "廊桥航班 1592 / 1906",
-            "4.0 次/日", "行业均值 3.8 次/日", "08:00-10:00", "峰值利用率 91%",
-            liveRegions,
-            "近 7 日整体利用率稳步上升，周末峰值略高于工作日"
-        ),
-        StatsData(
-            "72.6%", "较上月 +0.8%", "81.9%", "廊桥航班 6424 / 7843",
-            "3.9 次/日", "行业均值 3.8 次/日", "08:00-10:00", "峰值利用率 89%",
-            liveRegions,
-            "本月利用率整体平稳，建议关注 T2 远机位的低效使用情况"
-        )
-    )
-    val data = statsData[tabIndex]
+    // ---- 核心指标卡：今日实时 / 近 7 日 / 本月 全部从数据库实时算（t_gate_usage）----
+    // 仅在切换页签时重算，避免每次重组都查库
+    val data = remember(tabIndex) { buildStatsFor(tabIndex, context, liveRegions) }
 
     Column(Modifier.fillMaxSize()) {
         SubTopBar(
@@ -167,7 +152,7 @@ fun StatsScreen(onBack: () -> Unit) {
                         color = TextMain,
                         modifier = Modifier.weight(1f)
                     )
-                    Text("今日 00:00 - 09:45", fontSize = 12.sp, color = TextSub)
+                    Text("廊桥 / 远机位 · 状态分布（实时）", fontSize = 12.sp, color = TextSub)
                 }
                 Spacer(Modifier.height(14.dp))
                 data.regions.forEach { region ->
@@ -217,7 +202,82 @@ fun StatsScreen(onBack: () -> Unit) {
                     Text(data.warning, fontSize = 13.sp, color = Orange, lineHeight = 18.sp)
                 }
             }
-            Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(20.dp))
         }
     }
+}
+
+/**
+ * 统计页三个页签对应的日期区间 + 各自的上一个周期（用于算环比）。
+ *  0 = 今日实时（vs 昨日）
+ *  1 = 近 7 日（vs 前 7 日）
+ *  2 = 本月（1 日 ~ 今日，vs 上月同日区间）
+ */
+private data class PeriodRange(
+    val start: String, val end: String, val days: Int,
+    val prevStart: String, val prevEnd: String, val prevDays: Int
+)
+
+private fun periodFor(tab: Int): PeriodRange {
+    val cal = Calendar.getInstance()
+    val y = cal.get(Calendar.YEAR)
+    val m = cal.get(Calendar.MONTH)
+    val day = cal.get(Calendar.DAY_OF_MONTH)
+    val today = "%04d-%02d-%02d".format(y, m + 1, day)
+    fun shift(days: Int): String {
+        val c = Calendar.getInstance().apply {
+            time = cal.time
+            add(Calendar.DAY_OF_MONTH, days)
+        }
+        return "%04d-%02d-%02d".format(
+            c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1, c.get(Calendar.DAY_OF_MONTH)
+        )
+    }
+    return when (tab) {
+        0 -> PeriodRange(today, today, 1, shift(-1), shift(-1), 1)        // 今日 vs 昨日
+        1 -> PeriodRange(shift(-6), today, 7, shift(-13), shift(-7), 7)   // 近 7 日 vs 前 7 日
+        2 -> {                                                            // 本月 vs 上月同日区间
+            val start = "%04d-%02d-01".format(y, m + 1)
+            val pCal = Calendar.getInstance().apply { time = cal.time; add(Calendar.MONTH, -1) }
+            val pStart = "%04d-%02d-01".format(pCal.get(Calendar.YEAR), pCal.get(Calendar.MONTH) + 1)
+            val pEnd = "%04d-%02d-%02d".format(pCal.get(Calendar.YEAR), pCal.get(Calendar.MONTH) + 1, day)
+            PeriodRange(start, today, day, pStart, pEnd, day)
+        }
+        else -> PeriodRange(today, today, 1, today, today, 1)
+    }
+}
+
+/**
+ * 按页签从 t_gate_usage 实时计算核心率（利用率 / 靠桥率 / 周转 / 环比），
+ * 取代原先写死的演示数据。若区间内没有分配占用记录（未跑过一键分配），
+ * 给出诚实提示而非假数字。
+ */
+private fun buildStatsFor(tab: Int, context: Context, regions: List<RegionStat>): StatsData {
+    val p = periodFor(tab)
+    val cur = GateRepository.rangeStat(context, p.start, p.end, p.days)
+    val prev = GateRepository.rangeStat(context, p.prevStart, p.prevEnd, p.prevDays)
+    val avgDelta = if (prev.avgUtil <= 0f) "环比 —" else {
+        val d = (cur.avgUtil - prev.avgUtil) / prev.avgUtil * 100f
+        "较上一周期 %s%.1f%%".format(if (d >= 0) "+" else "", d)
+    }
+    val warning = when {
+        cur.flightCount == 0 ->
+            "当前区间暂无分配占用记录，请先在「机位分配」页执行一键分配，统计才会出数"
+        cur.avgUtil < 0.5f ->
+            "整体利用率偏低（${"%.1f".format(cur.avgUtil * 100)}%），建议优化机位排布或提高廊桥率"
+        else ->
+            "运行平稳，本期靠桥率 ${"%.1f".format(cur.bridgeRate * 100)}%"
+    }
+    return StatsData(
+        avgUtil = "%.1f%%".format(cur.avgUtil * 100),
+        avgDelta = avgDelta,
+        bridgeRate = "%.1f%%".format(cur.bridgeRate * 100),
+        bridgeDetail = "廊桥航班 ${cur.bridgeCount} / ${cur.flightCount}",
+        turnover = "%.1f 次/日".format(cur.turnover),
+        industryAvg = "行业均值 3.8 次/日",
+        peak = "",
+        peakUtil = "",
+        regions = regions,
+        warning = warning
+    )
 }

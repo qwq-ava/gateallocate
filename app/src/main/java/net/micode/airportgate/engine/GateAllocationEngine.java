@@ -79,12 +79,27 @@ public final class GateAllocationEngine {
         return s.substring(0, cut).trim();
     }
 
-    /** 机型兼容：gate.aircraftClasses 包含航班系列名即通过；为空表示不限制 */
+    /**
+     * 机型兼容：把机位允许的机型与航班机型**都归一到系列名**再比较。
+     *
+     * 机位维护界面存的是完整型号（"A350-900"、"B737 MAX 8"、"A320neo"），
+     * 航班侧通常也是完整型号，因此两边都先 seriesOf() 归一后比较：
+     *   "A350-900"   与 "A350"      -> A350 / A350   匹配
+     *   "A320neo"    与 "A320"      -> A320 / A320   匹配
+     *   "B737 MAX 8" 与 "B737-800"  -> B737 / B737   匹配
+     * 完全相同的字符串直接判定通过（优先，避免归一误差）。
+     * 机位未配置机型（空列表）表示不限制。
+     */
     public static boolean compatible(GateIn g, FlightIn f) {
         if (g.aircraftClasses == null || g.aircraftClasses.isEmpty()) return true;
-        String s = seriesOf(f.aircraft);
+        String flight = f.aircraft == null ? "" : f.aircraft.trim();
+        String series = seriesOf(flight);
         for (String c : g.aircraftClasses) {
-            if (c.trim().equalsIgnoreCase(s)) return true;
+            if (c == null) continue;
+            String t = c.trim();
+            if (t.isEmpty()) continue;
+            if (t.equalsIgnoreCase(flight)) return true;            // 完整型号完全相同
+            if (seriesOf(t).equalsIgnoreCase(series)) return true;  // 归一到系列名后一致
         }
         return false;
     }

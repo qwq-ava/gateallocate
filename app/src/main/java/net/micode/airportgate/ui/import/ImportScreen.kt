@@ -42,7 +42,6 @@ import net.micode.airportgate.data.db.GateRepository
 import net.micode.airportgate.model.DataSync
 import net.micode.airportgate.model.FlightDraft
 import net.micode.airportgate.model.ImportRecord
-import net.micode.airportgate.model.dateCompactOf
 import net.micode.airportgate.model.dateOf
 import net.micode.airportgate.ui.components.AppCard
 import net.micode.airportgate.ui.components.SectionTitle
@@ -75,8 +74,12 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
         "航班号", "航班日期", "进出港", "机型", "到达时刻", "离开时刻", "起降机场"
     )
 
-    // ---- 最近导入记录（最近 30 天）----
-    val records = remember { buildRecentRecords() }
+    // ---- 最近导入记录（最近 30 天，真实批次，从 t_import_batch 读取）----
+    // importRefresh 在每次提交成功后 +1，触发重新查库，使列表即时刷新
+    var importRefresh by remember { mutableStateOf(0) }
+    val records = remember(importRefresh) {
+        GateRepository.loadImportBatches(context, RECORD_RANGE_DAYS)
+    }
 
     // ---- 打开表格 ----
     fun openForm(mode: FlightFormMode) {
@@ -108,14 +111,18 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
             onSubmit = { date, rows ->
                 val valid = rows.filter { it.valid }
                 val skipped = rows.size - valid.size
+                val source = if (mode == FlightFormMode.CREATE) "手工录入" else "信息更改"
                 val n = GateRepository.saveFlights(
                     context, date, valid,
-                    source = if (mode == FlightFormMode.CREATE) "手工录入" else "信息更改"
+                    source = source
                 )
                 showMsg(
                     "$date 已保存 $n 条" +
                         (if (skipped > 0) "，$skipped 条信息不完整未保存" else "")
                 )
+                // 写入真实导入批次记录（时间 / 来源 / 条数 / 操作人），取代写死演示数据
+                GateRepository.addImportBatch(context, date, source, rows.size, n, skipped)
+                importRefresh++
                 // 航班数据已变更，触发分配界面自动重排
                 DataSync.bump()
                 formMode = null
@@ -163,7 +170,7 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
                             color = TextSub
                         )
                         Text(
-                            records.drop(1).firstOrNull()?.time ?: "—",
+                            records.firstOrNull()?.time ?: "—",
                             fontSize = 12.sp,
                             color = TextSub
                         )
@@ -346,24 +353,6 @@ private fun AllRecordsScreen(records: List<ImportRecord>, onBack: () -> Unit) {
             }
             Spacer(Modifier.height(8.dp))
         }
-    }
-}
-
-/** 构造最近 30 天的导入记录（文件名不再带 .xlsx 后缀） */
-private fun buildRecentRecords(): List<ImportRecord> {
-    val offsets = listOf(0, 1, 2, 3, 5, 8, 15, 22) // 距今天多少天
-    val times = listOf("09:24", "16:32", "08:47", "09:05", "15:20", "09:11", "08:58", "09:03")
-    val operators = listOf("张伟", "李娜", "张伟", "王芳", "李娜", "张伟", "王芳", "张伟")
-    val totals = listOf(128, 116, 121, 119, 130, 124, 122, 118)
-    val fails = listOf(0, 4, 0, 0, 3, 0, 0, 0)
-    return offsets.mapIndexed { i, d ->
-        ImportRecord(
-            fileName = "航班计划_${dateCompactOf(-d)}",
-            status = if (fails[i] > 0) "部分失败" else "导入成功",
-            time = "${dateOf(-d)} ${times[i]}",
-            operator = operators[i],
-            summary = "共 ${totals[i]} 条，成功 ${totals[i] - fails[i]} 条，失败 ${fails[i]} 条"
-        )
     }
 }
 
