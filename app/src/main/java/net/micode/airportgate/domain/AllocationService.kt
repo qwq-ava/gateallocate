@@ -62,4 +62,24 @@ object AllocationService {
         }
         AllocationResult(newFlights, gateCodes, outcome.failedFlightNos)
     }
+
+    /**
+     * 探测当前「可分配航班」与「可用机位」是否各自就绪。
+     * 界面据此决定「一键分配」按钮是否可点击，并在按钮置灰被点击时分别提示缺哪一项。
+     * 仅读取、不落库、不跑引擎。
+     */
+    suspend fun readiness(context: Context, date: String): AllocationReadiness = withContext(Dispatchers.Default) {
+        val drafts = GateRepository.loadFlights(context, date)
+            .filter { it.valid && it.status != "已取消" }
+        val gates = GateInfoStore.loadAvailableForEngine(context)
+        AllocationReadiness(drafts.isNotEmpty(), gates.isNotEmpty())
+    }
+}
+
+/** 分配就绪状态：航班与机位是否各自存在。 */
+data class AllocationReadiness(
+    val hasFlights: Boolean,
+    val hasGates: Boolean
+) {
+    val canAllocate: Boolean get() = hasFlights && hasGates
 }
