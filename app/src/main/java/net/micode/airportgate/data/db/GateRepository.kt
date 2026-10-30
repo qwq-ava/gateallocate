@@ -101,6 +101,7 @@ object GateRepository {
                     put(f.C_FLIGHT_NO, r.flightNo.trim())
                     put(f.C_FLIGHT_DATE, date)
                     put(f.C_DIRECTION, r.direction)
+                    put(f.C_FLIGHT_TYPE, r.flightType.ifBlank { "国内" })
                     put(f.C_AIRCRAFT, r.aircraft.trim())
                     put(f.C_SCHED_TIME, r.planTime.trim())
                     put(f.C_ARRIVAL_TIME, timeToMinutes(r.arrivalTime.trim()))
@@ -129,7 +130,7 @@ object GateRepository {
         val f = GateDbContract.Flight
         val out = mutableListOf<FlightDraft>()
         val c = db(context).rawQuery(
-            "SELECT ${f.C_ID},${f.C_FLIGHT_NO},${f.C_DIRECTION},${f.C_AIRCRAFT}," +
+            "SELECT ${f.C_ID},${f.C_FLIGHT_NO},${f.C_DIRECTION},${f.C_FLIGHT_TYPE},${f.C_AIRCRAFT}," +
                 "${f.C_ARRIVAL_TIME},${f.C_DEPARTURE_TIME},${f.C_ORIGIN},${f.C_DEST},${f.C_GATE_NO},${f.C_STATUS} " +
                 "FROM ${f.TABLE} WHERE ${f.C_FLIGHT_DATE}=? " +
                 "ORDER BY COALESCE(${f.C_ARRIVAL_TIME}, 1440) ASC, ${f.C_SCHED_TIME} ASC",
@@ -141,13 +142,14 @@ object GateRepository {
                     id = it.getLong(0),
                     flightNo = it.getString(1),
                     direction = it.getString(2),
-                    aircraft = it.getString(3),
-                    arrivalTime = if (it.isNull(4)) "" else minutesToTime(it.getInt(4)),
-                    departureTime = if (it.isNull(5)) "" else minutesToTime(it.getInt(5)),
-                    origin = it.getString(6),
-                    dest = it.getString(7),
-                    gateNo = if (it.isNull(8)) "" else it.getString(8),
-                    status = if (it.isNull(9)) "" else it.getString(9)
+                    flightType = if (it.isNull(3)) "国内" else it.getString(3),
+                    aircraft = it.getString(4),
+                    arrivalTime = if (it.isNull(5)) "" else minutesToTime(it.getInt(5)),
+                    departureTime = if (it.isNull(6)) "" else minutesToTime(it.getInt(6)),
+                    origin = it.getString(7),
+                    dest = it.getString(8),
+                    gateNo = if (it.isNull(9)) "" else it.getString(9),
+                    status = if (it.isNull(10)) "" else it.getString(10)
                 )
             }
         }
@@ -157,6 +159,14 @@ object GateRepository {
     /** 删除某一天的航班（重新导入前清底用） */
     fun clearFlights(context: Context, date: String): Int =
         db(context).delete(GateDbContract.Flight.TABLE, "${GateDbContract.Flight.C_FLIGHT_DATE}=?", arrayOf(date))
+
+    /** 按航班号删除某一天的航班（跨夜航班合并编辑时，前后两段分处两天，删除其一需把两段都清掉，避免孤儿记录） */
+    fun deleteFlightsByFlightNo(context: Context, date: String, flightNo: String): Int =
+        db(context).delete(
+            GateDbContract.Flight.TABLE,
+            "${GateDbContract.Flight.C_FLIGHT_DATE}=? AND ${GateDbContract.Flight.C_FLIGHT_NO}=?",
+            arrayOf(date, flightNo.trim())
+        )
 
     /** 更新某条航班的状态（分配模块分配完成后调用：待分配 -> 已分配） */
     fun updateFlightStatus(context: Context, id: Long, status: String): Int {

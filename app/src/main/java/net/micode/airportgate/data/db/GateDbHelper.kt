@@ -22,7 +22,7 @@ import android.database.sqlite.SQLiteOpenHelper
 object GateDbContract {
 
     const val DB_NAME = "airport_gate.db"
-    const val DB_VERSION = 5   // v5：新增 t_import_batch 导入批次记录表（记录每次录入/更改的真实批次）
+    const val DB_VERSION = 6   // v6：t_flight 新增 flight_type（国内/国际）标注列
 
     /** 数据保留策略（天）；-1 表示永久保留 */
     object Retention {
@@ -39,6 +39,7 @@ object GateDbContract {
         const val C_FLIGHT_NO = "flight_no"         // 航班号 MU5102
         const val C_FLIGHT_DATE = "flight_date"     // 航班日期 yyyy-MM-dd
         const val C_DIRECTION = "direction"         // 进出港 进港 / 出港
+        const val C_FLIGHT_TYPE = "flight_type"     // 国内 / 国际 航班属性标注
         const val C_AIRLINE = "airline"             // 航空公司
         const val C_AIRCRAFT = "aircraft_type"      // 机型 A320neo
         const val C_TAIL_NO = "tail_no"             // 机号 / 机尾号
@@ -148,6 +149,7 @@ class GateDbHelper private constructor(context: Context) :
                 ${f.C_FLIGHT_NO} TEXT NOT NULL,
                 ${f.C_FLIGHT_DATE} TEXT NOT NULL,
                 ${f.C_DIRECTION} TEXT NOT NULL,
+                ${f.C_FLIGHT_TYPE} TEXT DEFAULT '国内',
                 ${f.C_AIRLINE} TEXT,
                 ${f.C_AIRCRAFT} TEXT NOT NULL,
                 ${f.C_TAIL_NO} TEXT,
@@ -342,6 +344,13 @@ class GateDbHelper private constructor(context: Context) :
                 """.trimIndent()
             )
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_batch_time ON ${ib.TABLE}(${ib.C_BATCH_TIME})")
+        }
+
+        if (oldVersion < 6) {
+            // v6：t_flight 新增 flight_type（国内/国际）标注列，原有数据默认「国内」
+            if (!columnExists(db, f.TABLE, f.C_FLIGHT_TYPE)) {
+                db.execSQL("ALTER TABLE ${f.TABLE} ADD COLUMN ${f.C_FLIGHT_TYPE} TEXT DEFAULT '国内'")
+            }
         }
     }
 

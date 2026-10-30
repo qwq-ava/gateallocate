@@ -54,8 +54,9 @@ import net.micode.airportgate.ui.theme.TextSub
 @Composable
 fun AssignScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    // 当前航班日期 = 今天（分配结果按天落库，与导入页签口径一致）
-    val today = remember { dateOf(0) }
+    // 操作日期 = 明天：与「数据导入」目标日（明天）对齐，导入的航班才能被分配到；
+    // 跨夜航班的前段落在明天，分配时会展成次日（后天）并固定到同一机位。
+    val opDate = remember { dateOf(1) }
 
     // ---- 分配结果（引擎输出，用于甘特图展示） ----
     var currentFlights by remember { mutableStateOf<List<DayFlight>>(emptyList()) }
@@ -71,7 +72,7 @@ fun AssignScreen(onBack: () -> Unit) {
     // 这里只探测、不自动分配——分配动作交由用户点击「一键分配」触发。
     val dataVersion = DataSync.version
     LaunchedEffect(dataVersion) {
-        readiness = AllocationService.readiness(context, today)
+        readiness = AllocationService.readiness(context, opDate)
     }
 
     // 置灰按钮被点击时的两个未就绪提醒弹窗
@@ -89,7 +90,7 @@ fun AssignScreen(onBack: () -> Unit) {
             try {
                 // 业务逻辑交由 domain.AllocationService 执行：
                 // 读取航班+机位 -> 引擎分配 -> 落库 t_assignment/t_gate_usage -> 回写航班
-                val res = AllocationService.allocate(context, today)
+                val res = AllocationService.allocate(context, opDate)
                 delay(300) // 让「分配中」状态可见
                 currentFlights = res.flights
                 gateCodes = res.gateCodes
@@ -126,7 +127,7 @@ fun AssignScreen(onBack: () -> Unit) {
     val shownSlots = ganttSlots
 
     Column(Modifier.fillMaxSize()) {
-        SubTopBar("机位分配", onBack)
+        SubTopBar("机位分配 · $opDate", onBack)
         Column(
             Modifier
                 .weight(1f)

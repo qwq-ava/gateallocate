@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import net.micode.airportgate.data.model.FlightDraft
 import net.micode.airportgate.data.model.dateOf
+import net.micode.airportgate.data.model.normalizeTime
 import net.micode.airportgate.ui.components.SubTopBar
 import net.micode.airportgate.ui.theme.Blue
 import net.micode.airportgate.ui.theme.BlueLight
@@ -70,9 +71,21 @@ import net.micode.airportgate.ui.theme.TextSub
 // 时间口径：卡片收「到达时刻 / 离开时刻」两个值，即机位占用窗口，
 // 落库为 t_flight.arrival_time / departure_time（INT 当日分钟数）；
 // 「计划起降」不再手填，由进出港派生（进港取到达、出港取离开），只用于展示兜底。
+//
+// 页签口径：
+//   - 新建导入（CREATE）：仅「明天航班信息」一页（按需求只保留明日导入）；
+//   - 信息更改（EDIT）：今天 / 明天两页，方便修改已导入航班；
+//     其中「今天」已飞完（离开时刻早于当前时刻）的航班会被锁定为只读，不可修改。
 
 /** 录入模式：新建导入 / 修改已有 */
 enum class FlightFormMode { CREATE, EDIT }
+
+/** 一个导入日期页签（今天 / 明天），各自持有独立的航班列表 */
+data class FlightFormTab(
+    val date: String,
+    val label: String,
+    val rows: SnapshotStateList<FlightDraft>
+)
 
 /** 常用机型（下拉点选） */
 private val AIRCRAFT_OPTIONS = listOf(
@@ -90,12 +103,14 @@ private val AIRPORT_OPTIONS = listOf(
     "南宁吴圩", "兰州中川", "乌鲁木齐地窝堡", "呼和浩特白塔"
 )
 
-/** 时间输入自动补冒号：0615 -> 06:15 */
+/** 时间输入实时规整：去掉非数字后按长度补格式（6->6、15->15、615->06:15、0615->06:15）。
+ *  宽松写法的最终校验交给 model.normalizeTime，这里只做顺手排版，不阻断输入。 */
 private fun formatTimeInput(raw: String): String {
     val d = raw.filter { it.isDigit() }.take(4)
     return when {
+        d.isEmpty() -> ""
         d.length <= 2 -> d
-        d.length == 3 -> "${d.substring(0, 2)}:${d.substring(2)}"
+        d.length == 3 -> "0${d[0]}:${d.substring(1)}"
         else -> "${d.substring(0, 2)}:${d.substring(2, 4)}"
     }
 }
@@ -103,70 +118,87 @@ private fun formatTimeInput(raw: String): String {
 @Composable
 fun FlightFormScreen(
     mode: FlightFormMode,
-    rowsToday: SnapshotStateList<FlightDraft>,
-    rowsTomorrow: SnapshotStateList<FlightDraft>,
+    tabs: List<FlightFormTab>,
     onBack: () -> Unit,
-    onSubmit: (date: String, rows: List<FlightDraft>) -> Unit
+    onSubmit: (Map<String, List<FlightDraft>>) -> Unit
 ) {
-    var dayTab by remember { mutableIntStateOf(0) }
     val vScroll = rememberScrollState()
-
-    val date = if (dayTab == 0) dateOf(0) else dateOf(1)
-    val rows = if (dayTab == 0) rowsToday else rowsTomorrow
+    var tabIndex by remember { mutableIntStateOf(0) }
+    val active = tabs[tabIndex]
+    val date = active.date
+    val rows = active.rows
     val invalidCount = rows.count { !it.valid }
 
     Column(Modifier.fillMaxSize().background(Color(0xFFF4F5F7))) {
         SubTopBar(if (mode == FlightFormMode.CREATE) "数据导入" else "航班信息更改", onBack)
 
-        // ---- 今天 / 明天 页签 ----
-        Surface(color = Color.White, shadowElevation = 1.dp) {
-            Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+        // ---- 日期页签：EDIT 为今天/明天两页；CREATE 仅明天一页 ----
+        if (tabs.size > 1) {
+            Surface(color = Color.White, shadowElevation = 1.dp) {
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(Color(0xFFF4F5F7))
                 ) {
-                    listOf("今天航班信息" to dateOf(0), "明天航班信息" to dateOf(1))
-                        .forEachIndexed { i, (label, d) ->
-                            val active = dayTab == i
-                            Column(
-                                Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (active) BlueLight else Color.Transparent)
-                                    .clickable { dayTab = i }
-                                    .padding(vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(
-                                    label,
-                                    fontSize = 14.sp,
-                                    color = if (active) Blue else TextSub,
-                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
-                                )
-                                Spacer(Modifier.height(2.dp))
-                                Text(d, fontSize = 11.sp, color = if (active) Blue else TextSub)
-                            }
+                    tabs.forEachIndexed { i, t ->
+                        val activeTab = tabIndex == i
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (activeTab) BlueLight else Color.Transparent)
+                                .clickable { tabIndex = i }
+                                .padding(vertical = 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                t.label,
+                                fontSize = 14.sp,
+                                color = if (activeTab) Blue else TextSub,
+                                fontWeight = if (activeTab) FontWeight.Bold else FontWeight.Normal
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(t.date, fontSize = 11.sp, color = if (activeTab) Blue else TextSub)
                         }
+                    }
                 }
-                Spacer(Modifier.height(8.dp))
+            }
+        }
+
+        // ---- 当前页日期信息 ----
+        Surface(color = Color.White, shadowElevation = 1.dp) {
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        "共 ${rows.size} 条 · 航班日期 $date",
-                        fontSize = 12.sp,
-                        color = TextSub
-                    )
-                    Text(
-                        if (invalidCount == 0) "全部完整" else "$invalidCount 条待补充",
-                        fontSize = 12.sp,
-                        color = if (invalidCount == 0) Blue else Orange,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column {
+                        Text(
+                            active.label,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Blue
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(date, fontSize = 11.sp, color = TextSub)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            "共 ${rows.size} 条 · 航班日期 $date",
+                            fontSize = 12.sp,
+                            color = TextSub
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            if (invalidCount == 0) "全部完整" else "$invalidCount 条待补充",
+                            fontSize = 12.sp,
+                            color = if (invalidCount == 0) Blue else Orange,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }
@@ -247,15 +279,15 @@ fun FlightFormScreen(
                 }
                 Spacer(Modifier.width(8.dp))
                 Button(
-                    onClick = { onSubmit(date, rows.toList()) },
-                    enabled = rows.isNotEmpty(),
+                    onClick = { onSubmit(tabs.associate { it.date to it.rows.toList() }) },
+                    enabled = tabs.any { it.rows.isNotEmpty() },
                     modifier = Modifier
                         .weight(1.2f)
                         .height(44.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Blue)
                 ) {
                     Text(
-                        if (mode == FlightFormMode.CREATE) "保存导入" else "保存修改",
+                        "校验并预览",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -265,7 +297,7 @@ fun FlightFormScreen(
     }
 }
 
-/** 一个航班 = 一张卡片，字段竖排，不横向滚动 */
+/** 一个航班 = 一张卡片；已飞完（locked）为只读，否则可编辑 */
 @Composable
 private fun FlightCard(
     index: Int,
@@ -278,143 +310,216 @@ private fun FlightCard(
         shape = RoundedCornerShape(12.dp),
         shadowElevation = 1.dp
     ) {
-        Column(Modifier.padding(12.dp)) {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    Modifier
-                        .size(24.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(BlueLight),
-                    contentAlignment = Alignment.Center
+        if (row.locked) {
+            // 已飞完：只读展示，不可编辑、不可删除
+            Column(Modifier.padding(12.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(index.toString(), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Blue)
+                    Box(
+                        Modifier
+                            .size(24.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFFEDEFF2)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(index.toString(), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextSub)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text("航班 $index", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextMain)
+                    Spacer(Modifier.weight(1f))
+                    Surface(color = Color(0xFFEDEFF2), shape = RoundedCornerShape(6.dp)) {
+                        Text("已飞完", fontSize = 11.sp, color = TextSub, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+                    }
                 }
-                Spacer(Modifier.width(8.dp))
-                Text("航班 $index", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextMain)
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        Icons.Outlined.Delete,
-                        contentDescription = "删除本条",
-                        tint = Color(0xFFE24B4A),
-                        modifier = Modifier.size(18.dp)
+                Spacer(Modifier.height(10.dp))
+                Row(Modifier.fillMaxWidth()) {
+                    ReadOnlyCell("航班号", row.flightNo, Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
+                    ReadOnlyCell("机型", row.aircraft, Modifier.weight(1f))
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth()) {
+                    ReadOnlyCell("到达 / 离开", "${row.arrivalTime} – ${row.departureTime}", Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
+                    ReadOnlyCell("进出港", row.direction, Modifier.weight(1f))
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth()) {
+                    ReadOnlyCell("始发", row.origin, Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
+                    ReadOnlyCell("目的", row.dest, Modifier.weight(1f))
+                }
+                Spacer(Modifier.height(8.dp))
+                Text("该航班已飞完，不可修改", fontSize = 11.sp, color = TextSub)
+            }
+        } else {
+            // 可编辑卡片
+            Column(Modifier.padding(12.dp)) {
+                // 行内错误提示：任意字段填过即视为“已开工”，其余必填项为空则标红
+                val hasInput = listOf(
+                    row.flightNo, row.aircraft, row.arrivalTime, row.departureTime,
+                    row.origin, row.dest
+                ).any { it.isNotBlank() }
+                val arrErr = when {
+                    row.arrivalTime.isNotBlank() && normalizeTime(row.arrivalTime) == null -> "时间格式应为 HH:mm，如 06:15"
+                    hasInput && row.arrivalTime.isBlank() -> "必填"
+                    else -> null
+                }
+                val depErr = when {
+                    row.departureTime.isNotBlank() && normalizeTime(row.departureTime) == null -> "时间格式应为 HH:mm，如 06:15"
+                    hasInput && row.departureTime.isBlank() -> "必填"
+                    else -> null
+                }
+                val noErr = if (hasInput && row.flightNo.isBlank()) "必填" else null
+                val acErr = if (hasInput && row.aircraft.isBlank()) "必填" else null
+                val orgErr = if (hasInput && row.origin.isBlank()) "必填" else null
+                val dstErr = if (hasInput && row.dest.isBlank()) "必填" else null
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier
+                            .size(24.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(BlueLight),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(index.toString(), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Blue)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text("航班 $index", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextMain)
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            Icons.Outlined.Delete,
+                            contentDescription = "删除本条",
+                            tint = Color(0xFFE24B4A),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                // 航班号 + 机型
+                Row(Modifier.fillMaxWidth()) {
+                    LabeledField(
+                        label = "航班号",
+                        value = row.flightNo,
+                        onValueChange = { onChange(row.copy(flightNo = it)) },
+                        hint = "MU5102",
+                        modifier = Modifier.weight(1f),
+                        error = noErr
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    PickerField(
+                        label = "机型",
+                        value = row.aircraft,
+                        onValueChange = { onChange(row.copy(aircraft = it)) },
+                        options = AIRCRAFT_OPTIONS,
+                        modifier = Modifier.weight(1f),
+                        error = acErr
                     )
                 }
-            }
 
-            Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
 
-            // 航班号 + 机型
-            Row(Modifier.fillMaxWidth()) {
-                LabeledField(
-                    label = "航班号",
-                    value = row.flightNo,
-                    onValueChange = { onChange(row.copy(flightNo = it)) },
-                    hint = "MU5102",
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                PickerField(
-                    label = "机型",
-                    value = row.aircraft,
-                    onValueChange = { onChange(row.copy(aircraft = it)) },
-                    options = AIRCRAFT_OPTIONS,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            // 到达 / 离开 —— 机位占用窗口，分配引擎以此为准
-            Row(Modifier.fillMaxWidth()) {
-                LabeledField(
-                    label = "到达时刻",
-                    value = row.arrivalTime,
-                    onValueChange = { onChange(row.copy(arrivalTime = formatTimeInput(it))) },
-                    hint = "06:15",
-                    isTime = true,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                LabeledField(
-                    label = "离开时刻",
-                    value = row.departureTime,
-                    onValueChange = { onChange(row.copy(departureTime = formatTimeInput(it))) },
-                    hint = "07:00",
-                    isTime = true,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            // 进出港 + 计划起降（派生，只读）
-            Row(Modifier.fillMaxWidth()) {
-                Column(Modifier.weight(1f)) {
-                    Text("进出港", fontSize = 11.sp, color = TextSub)
-                    Spacer(Modifier.height(4.dp))
-                    DirChip(row.direction) { onChange(row.copy(direction = it)) }
+                // 到达 / 离开 —— 机位占用窗口，分配引擎以此为准
+                Row(Modifier.fillMaxWidth()) {
+                    LabeledField(
+                        label = "到达时刻",
+                        value = row.arrivalTime,
+                        onValueChange = { onChange(row.copy(arrivalTime = formatTimeInput(it))) },
+                        hint = "06:15",
+                        isTime = true,
+                        modifier = Modifier.weight(1f),
+                        error = arrErr
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    LabeledField(
+                        label = "离开时刻",
+                        value = row.departureTime,
+                        onValueChange = { onChange(row.copy(departureTime = formatTimeInput(it))) },
+                        hint = "07:00",
+                        isTime = true,
+                        modifier = Modifier.weight(1f),
+                        error = depErr
+                    )
                 }
-                Spacer(Modifier.width(8.dp))
-                DerivedField(
-                    label = "计划起降",
-                    value = row.planTime,
-                    tip = if (row.direction == FlightDraft.DIR_IN) "取到达" else "取离开",
-                    modifier = Modifier.weight(1f)
+
+                Spacer(Modifier.height(8.dp))
+
+                // 进出港 + 国内/国际（均为快捷切换）
+                Row(Modifier.fillMaxWidth()) {
+                    Column(Modifier.weight(1f)) {
+                        Text("进出港", fontSize = 11.sp, color = TextSub)
+                        Spacer(Modifier.height(4.dp))
+                        DirChip(row.direction) { onChange(row.copy(direction = it)) }
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("航班属性", fontSize = 11.sp, color = TextSub)
+                        Spacer(Modifier.height(4.dp))
+                        TypeChip(row.flightType) { onChange(row.copy(flightType = it)) }
+                    }
+                }
+
+                val aNorm = normalizeTime(row.arrivalTime)
+                val dNorm = normalizeTime(row.departureTime)
+                if (row.isOvernight) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "检测到跨天航班：保存时自动拆分为「${aNorm ?: row.arrivalTime}→24:00」与「次日0:00→${dNorm ?: row.departureTime}」两段",
+                        fontSize = 11.sp,
+                        color = Blue
+                    )
+                } else if (aNorm != null && dNorm != null && !row.orderValid) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        if (aNorm == dNorm) "到达与离开时刻不能相同" else "离开时刻需晚于到达时刻",
+                        fontSize = 11.sp,
+                        color = Color(0xFFE24B4A)
+                    )
+                } else if (row.occupyMinutes > 0) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "占用机位 ${row.occupyMinutes} 分钟（${row.arrivalTime} – ${row.departureTime}）",
+                        fontSize = 11.sp,
+                        color = TextSub
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                // 始发 / 目的
+                PickerField(
+                    label = "始发机场",
+                    value = row.origin,
+                    onValueChange = { onChange(row.copy(origin = it)) },
+                    options = AIRPORT_OPTIONS,
+                    modifier = Modifier.fillMaxWidth(),
+                    error = orgErr
+                )
+                Spacer(Modifier.height(8.dp))
+                PickerField(
+                    label = "目的机场",
+                    value = row.dest,
+                    onValueChange = { onChange(row.copy(dest = it)) },
+                    options = AIRPORT_OPTIONS,
+                    modifier = Modifier.fillMaxWidth(),
+                    error = dstErr
                 )
             }
-
-            if (row.arrivalTime.length == 5 && row.departureTime.length == 5 && !row.orderValid) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "离开时刻需晚于到达时刻",
-                    fontSize = 11.sp,
-                    color = Color(0xFFE24B4A)
-                )
-            } else if (row.occupyMinutes > 0) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "占用机位 ${row.occupyMinutes} 分钟（${row.arrivalTime} – ${row.departureTime}）",
-                    fontSize = 11.sp,
-                    color = TextSub
-                )
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            // 始发 / 目的
-            PickerField(
-                label = "始发机场",
-                value = row.origin,
-                onValueChange = { onChange(row.copy(origin = it)) },
-                options = AIRPORT_OPTIONS,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(8.dp))
-            PickerField(
-                label = "目的机场",
-                value = row.dest,
-                onValueChange = { onChange(row.copy(dest = it)) },
-                options = AIRPORT_OPTIONS,
-                modifier = Modifier.fillMaxWidth()
-            )
         }
     }
 }
 
-/** 带标题的普通输入框 */
+/** 只读单元格（已飞完航班展示用） */
 @Composable
-private fun LabeledField(
-    label: String,
-    value: String,
-    onValueChange: (String) -> Unit,
-    hint: String,
-    modifier: Modifier = Modifier,
-    isTime: Boolean = false
-) {
+private fun ReadOnlyCell(label: String, value: String, modifier: Modifier = Modifier) {
     Column(modifier) {
         Text(label, fontSize = 11.sp, color = TextSub)
         Spacer(Modifier.height(4.dp))
@@ -423,8 +528,41 @@ private fun LabeledField(
                 .fillMaxWidth()
                 .height(44.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(if (value.isBlank()) Color(0xFFFBFBFC) else Color.White)
+                .background(Color(0xFFF4F5F7))
                 .border(1.dp, Color(0xFFE5E7EB), RoundedCornerShape(8.dp))
+                .padding(horizontal = 10.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Text(
+                if (value.isBlank()) "—" else value,
+                fontSize = 14.sp,
+                color = if (value.isBlank()) Color(0xFFBBBBBB) else TextMain
+            )
+        }
+    }
+}
+
+/** 带标题的普通输入框，可标注错误（红框 + 提示） */
+@Composable
+private fun LabeledField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    hint: String,
+    modifier: Modifier = Modifier,
+    isTime: Boolean = false,
+    error: String? = null
+) {
+    Column(modifier) {
+        Text(label, fontSize = 11.sp, color = if (error != null) Color(0xFFE24B4A) else TextSub)
+        Spacer(Modifier.height(4.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (value.isBlank()) Color(0xFFFBFBFC) else Color.White)
+                .border(1.dp, if (error != null) Color(0xFFE24B4A) else Color(0xFFE5E7EB), RoundedCornerShape(8.dp))
                 .padding(horizontal = 10.dp),
             contentAlignment = Alignment.CenterStart
         ) {
@@ -444,6 +582,10 @@ private fun LabeledField(
                     }
                 }
             )
+        }
+        if (error != null) {
+            Spacer(Modifier.height(3.dp))
+            Text(error, fontSize = 10.sp, color = Color(0xFFE24B4A))
         }
     }
 }
@@ -484,18 +626,19 @@ private fun DerivedField(
     }
 }
 
-/** 带下拉候选的输入框：可直接打字，也可点箭头从常用值里选 */
+/** 带下拉候选的输入框：可直接打字，也可点箭头从常用值里选，可标注错误 */
 @Composable
 private fun PickerField(
     label: String,
     value: String,
     onValueChange: (String) -> Unit,
     options: List<String>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    error: String? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     Column(modifier) {
-        Text(label, fontSize = 11.sp, color = TextSub)
+        Text(label, fontSize = 11.sp, color = if (error != null) Color(0xFFE24B4A) else TextSub)
         Spacer(Modifier.height(4.dp))
         Box(
             Modifier
@@ -503,7 +646,7 @@ private fun PickerField(
                 .height(44.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(if (value.isBlank()) Color(0xFFFBFBFC) else Color.White)
-                .border(1.dp, Color(0xFFE5E7EB), RoundedCornerShape(8.dp))
+                .border(1.dp, if (error != null) Color(0xFFE24B4A) else Color(0xFFE5E7EB), RoundedCornerShape(8.dp))
                 .padding(horizontal = 10.dp),
             contentAlignment = Alignment.CenterStart
         ) {
@@ -548,6 +691,38 @@ private fun PickerField(
                     )
                 }
             }
+        }
+        if (error != null) {
+            Spacer(Modifier.height(3.dp))
+            Text(error, fontSize = 10.sp, color = Color(0xFFE24B4A))
+        }
+    }
+}
+
+/** 国内 / 国际航班属性：点击在「国内 / 国际」之间切换 */
+@Composable
+private fun TypeChip(value: String, onChange: (String) -> Unit) {
+    val isDomestic = value == FlightDraft.TYPE_DOMESTIC
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isDomestic) BlueLight else OrangeLight)
+            .border(1.dp, if (isDomestic) BlueLight else OrangeLight, RoundedCornerShape(8.dp))
+            .clickable { onChange(if (isDomestic) FlightDraft.TYPE_INTL else FlightDraft.TYPE_DOMESTIC) }
+            .padding(horizontal = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(value, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = if (isDomestic) Blue else Orange)
+            Spacer(Modifier.width(2.dp))
+            Icon(
+                Icons.Outlined.SwapVert,
+                contentDescription = "切换国内/国际",
+                tint = if (isDomestic) Blue else Orange,
+                modifier = Modifier.size(16.dp)
+            )
         }
     }
 }
