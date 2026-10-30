@@ -1,9 +1,9 @@
-package net.micode.airportgate.domain.stats
+package net.micode.airportgate.biz.stats
 
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
-import net.micode.airportgate.model.GateInfoRow
+import net.micode.airportgate.data.model.GateInfoRow
 
 // ========================= 机位使用率计算方法 =========================
 //

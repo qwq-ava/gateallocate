@@ -51,8 +51,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
-import net.micode.airportgate.model.GateSlot
-import net.micode.airportgate.model.nowMinuteOfDay
+import net.micode.airportgate.data.model.GateSlot
+import net.micode.airportgate.data.model.nowMinuteOfDay
 import net.micode.airportgate.ui.components.AppCard
 import net.micode.airportgate.ui.theme.Blue
 import net.micode.airportgate.ui.theme.BlueLight

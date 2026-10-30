@@ -1,14 +1,14 @@
-package net.micode.airportgate.domain
+package net.micode.airportgate.biz
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.micode.airportgate.data.db.GateRepository
-import net.micode.airportgate.engine.reallocateAll
-import net.micode.airportgate.engine.toAssignmentRows
-import net.micode.airportgate.engine.toUsageRows
-import net.micode.airportgate.model.DayFlight
-import net.micode.airportgate.model.GateInfoStore
+import net.micode.airportgate.biz.engine.reallocateAll
+import net.micode.airportgate.biz.engine.toAssignmentRows
+import net.micode.airportgate.biz.engine.toUsageRows
+import net.micode.airportgate.data.model.DayFlight
+import net.micode.airportgate.data.model.GateInfoStore
 
 /**
  * 控制层（业务逻辑层）：机位分配业务协调者。

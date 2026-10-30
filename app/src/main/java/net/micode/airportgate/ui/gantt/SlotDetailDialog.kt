@@ -21,8 +21,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import net.micode.airportgate.model.GateSlot
-import net.micode.airportgate.model.fmtTime
+import net.micode.airportgate.data.model.GateSlot
+import net.micode.airportgate.data.model.fmtTime
 import net.micode.airportgate.ui.theme.Blue
 import net.micode.airportgate.ui.theme.ConflictRed
 import net.micode.airportgate.ui.theme.TextMain

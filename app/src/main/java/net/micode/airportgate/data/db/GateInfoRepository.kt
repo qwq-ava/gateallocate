@@ -2,8 +2,8 @@ package net.micode.airportgate.data.db
 
 import android.content.ContentValues
 import android.content.Context
-import net.micode.airportgate.model.GateInfoOptions
-import net.micode.airportgate.model.GateInfoRow
+import net.micode.airportgate.data.model.GateInfoOptions
+import net.micode.airportgate.data.model.GateInfoRow
 
 // ========================= 机位信息表（t_gate）数据访问 =========================
 //

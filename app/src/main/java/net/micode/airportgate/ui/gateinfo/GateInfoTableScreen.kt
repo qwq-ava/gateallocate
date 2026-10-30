@@ -49,9 +49,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import net.micode.airportgate.model.GateInfoOptions
-import net.micode.airportgate.model.GateInfoRow
-import net.micode.airportgate.model.timeToMinutes
+import net.micode.airportgate.data.model.GateInfoOptions
+import net.micode.airportgate.data.model.GateInfoRow
+import net.micode.airportgate.data.model.timeToMinutes
 import net.micode.airportgate.ui.components.SubTopBar
 import net.micode.airportgate.ui.theme.Blue
 import net.micode.airportgate.ui.theme.Green

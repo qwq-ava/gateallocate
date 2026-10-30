@@ -38,10 +38,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import net.micode.airportgate.model.RegionStat
-import net.micode.airportgate.model.StatsData
-import net.micode.airportgate.domain.StatsService
-import net.micode.airportgate.domain.stats.UtilizationResult
+import net.micode.airportgate.data.model.RegionStat
+import net.micode.airportgate.data.model.StatsData
+import net.micode.airportgate.biz.UsageStatisticsController
+import net.micode.airportgate.biz.stats.UtilizationResult
 import net.micode.airportgate.ui.components.AppCard
 import net.micode.airportgate.ui.components.SubTopBar
 import net.micode.airportgate.ui.theme.Blue
@@ -57,7 +57,7 @@ import net.micode.airportgate.ui.theme.TextSub
 // 再映射成界面用的 StatsData / RegionStat。
 
 @Composable
-fun StatsScreen(onBack: () -> Unit) {
+fun UsageAnalysisUI(onBack: () -> Unit) {
     var tabIndex by remember { mutableIntStateOf(0) }
     val tabs = listOf("今日实时", "近 7 日", "本月")
     val context = LocalContext.current
@@ -66,8 +66,8 @@ fun StatsScreen(onBack: () -> Unit) {
     var result by remember { mutableStateOf<UtilizationResult?>(null) }
 
     LaunchedEffect(tabIndex) {
-        // 业务逻辑交由 domain.StatsService 执行（算窗口 -> 调计算模块）
-        result = StatsService.computeStats(context, tabIndex)
+        // 业务逻辑交由 domain.UsageStatisticsController 执行（算窗口 -> 调计算模块）
+        result = UsageStatisticsController.computeStats(context, tabIndex)
     }
 
     val data = result?.toStatsData() ?: StatsData(

@@ -1,4 +1,4 @@
-package net.micode.airportgate.model
+package net.micode.airportgate.data.model
 
 // ========================= 机位分配：实体模型 =========================
 // 对齐《软件设计规格说明书》4.2 类设计：

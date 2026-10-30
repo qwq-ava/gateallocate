@@ -1,6 +1,6 @@
-package net.micode.airportgate.domain.stats
+package net.micode.airportgate.biz.stats
 
-import net.micode.airportgate.model.GateInfoRow
+import net.micode.airportgate.data.model.GateInfoRow
 
 // ========================= 四张表的接口（仅契约，不含数据库实现） =========================
 // 将来建好数据库后，让各个表的 Dao/Repository 实现这些接口即可，

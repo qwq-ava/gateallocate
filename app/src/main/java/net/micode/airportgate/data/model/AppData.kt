@@ -1,4 +1,4 @@
-package net.micode.airportgate.model
+package net.micode.airportgate.data.model
 
 import android.app.Activity
 import android.content.Context

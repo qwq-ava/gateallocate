@@ -1,9 +1,9 @@
-package net.micode.airportgate.domain
+package net.micode.airportgate.biz
 
 import android.content.Context
 import net.micode.airportgate.data.db.GateRepository
-import net.micode.airportgate.model.DataSync
-import net.micode.airportgate.model.FlightDraft
+import net.micode.airportgate.data.model.DataSync
+import net.micode.airportgate.data.model.FlightDraft
 
 /**
  * 控制层（业务逻辑层）：航班导入业务协调者。

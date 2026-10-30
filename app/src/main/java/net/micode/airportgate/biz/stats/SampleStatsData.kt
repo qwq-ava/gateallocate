@@ -1,7 +1,7 @@
-package net.micode.airportgate.domain.stats
+package net.micode.airportgate.biz.stats
 
-import net.micode.airportgate.model.GateInfoOptions
-import net.micode.airportgate.model.GateInfoRow
+import net.micode.airportgate.data.model.GateInfoOptions
+import net.micode.airportgate.data.model.GateInfoRow
 import java.util.Calendar
 
 // ========================= 示例数据源（内存实现，仅用于演示/测试） =========================

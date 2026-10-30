@@ -31,10 +31,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import net.micode.airportgate.model.DataSync
-import net.micode.airportgate.model.GateInfoOptions
-import net.micode.airportgate.model.GateInfoRow
-import net.micode.airportgate.model.GateInfoStore
+import net.micode.airportgate.data.model.DataSync
+import net.micode.airportgate.data.model.GateInfoOptions
+import net.micode.airportgate.data.model.GateInfoRow
+import net.micode.airportgate.data.model.GateInfoStore
 import net.micode.airportgate.ui.components.AppCard
 import net.micode.airportgate.ui.components.SubTopBar
 import net.micode.airportgate.ui.components.VerticalDividerCompat

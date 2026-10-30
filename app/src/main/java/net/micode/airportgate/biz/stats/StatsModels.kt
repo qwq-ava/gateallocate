@@ -1,6 +1,6 @@
-package net.micode.airportgate.domain.stats
+package net.micode.airportgate.biz.stats
 
-import net.micode.airportgate.model.GateInfoOptions
+import net.micode.airportgate.data.model.GateInfoOptions
 
 // ========================= 统计计算用领域模型 =========================
 // 这里只定义「计算」需要的字段，不涉及任何数据库/表实现。

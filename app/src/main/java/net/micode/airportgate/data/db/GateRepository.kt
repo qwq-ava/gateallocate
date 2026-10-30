@@ -4,13 +4,13 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.SQLException
 import android.database.sqlite.SQLiteDatabase
-import net.micode.airportgate.model.FlightDraft
-import net.micode.airportgate.model.GateInfoStore
-import net.micode.airportgate.model.ImportRecord
-import net.micode.airportgate.model.minutesToTime
-import net.micode.airportgate.model.timeToMinutes
-import net.micode.airportgate.model.timestampNow
-import net.micode.airportgate.model.dateOf
+import net.micode.airportgate.data.model.FlightDraft
+import net.micode.airportgate.data.model.GateInfoStore
+import net.micode.airportgate.data.model.ImportRecord
+import net.micode.airportgate.data.model.minutesToTime
+import net.micode.airportgate.data.model.timeToMinutes
+import net.micode.airportgate.data.model.timestampNow
+import net.micode.airportgate.data.model.dateOf
 
 // ========================= 数据访问层 =========================
 //

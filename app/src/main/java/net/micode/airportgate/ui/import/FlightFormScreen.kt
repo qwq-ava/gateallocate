@@ -51,8 +51,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import net.micode.airportgate.model.FlightDraft
-import net.micode.airportgate.model.dateOf
+import net.micode.airportgate.data.model.FlightDraft
+import net.micode.airportgate.data.model.dateOf
 import net.micode.airportgate.ui.components.SubTopBar
 import net.micode.airportgate.ui.theme.Blue
 import net.micode.airportgate.ui.theme.BlueLight

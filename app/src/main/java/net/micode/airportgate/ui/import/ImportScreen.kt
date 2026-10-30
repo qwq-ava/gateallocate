@@ -39,10 +39,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import net.micode.airportgate.data.db.GateRepository
-import net.micode.airportgate.domain.ImportService
-import net.micode.airportgate.model.FlightDraft
-import net.micode.airportgate.model.ImportRecord
-import net.micode.airportgate.model.dateOf
+import net.micode.airportgate.biz.ImportService
+import net.micode.airportgate.data.model.FlightDraft
+import net.micode.airportgate.data.model.ImportRecord
+import net.micode.airportgate.data.model.dateOf
 import net.micode.airportgate.ui.components.AppCard
 import net.micode.airportgate.ui.components.SectionTitle
 import net.micode.airportgate.ui.components.StatusChip

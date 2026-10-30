@@ -36,7 +36,7 @@ import net.micode.airportgate.ui.components.BottomNavBar
 import net.micode.airportgate.ui.gateinfo.GateInfoRoute
 import net.micode.airportgate.ui.home.HomeScreen
 import net.micode.airportgate.ui.import.ImportScreen
-import net.micode.airportgate.ui.stats.StatsScreen
+import net.micode.airportgate.ui.stats.UsageAnalysisUI
 import net.micode.airportgate.ui.theme.AirportGateAppTheme
 import net.micode.airportgate.ui.theme.BgGray
 
@@ -98,7 +98,7 @@ fun AppRoot() {
                 Screen.Import -> ImportScreen(onBack = { current = null }, showMsg = showMsg)
                 Screen.GateInfo -> GateInfoRoute(onBack = { current = null }, showMsg = showMsg)
                 Screen.Assign -> AssignScreen(onBack = { current = null })
-                Screen.Stats -> StatsScreen(onBack = { current = null })
+                Screen.Stats -> UsageAnalysisUI(onBack = { current = null })
             }
         }
     }

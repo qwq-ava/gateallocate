@@ -1,4 +1,4 @@
-package net.micode.airportgate.domain.stats
+package net.micode.airportgate.biz.stats
 
 import android.content.Context
 import android.database.Cursor
@@ -6,7 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.micode.airportgate.data.db.GateDbContract
 import net.micode.airportgate.data.db.GateDbHelper
-import net.micode.airportgate.model.GateInfoRow
+import net.micode.airportgate.data.model.GateInfoRow
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale

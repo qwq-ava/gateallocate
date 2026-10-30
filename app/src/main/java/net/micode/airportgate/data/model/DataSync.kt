@@ -1,4 +1,4 @@
-package net.micode.airportgate.model
+package net.micode.airportgate.data.model
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf

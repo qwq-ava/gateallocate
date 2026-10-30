@@ -1,13 +1,13 @@
-package net.micode.airportgate.engine
+package net.micode.airportgate.biz.engine
 
-import net.micode.airportgate.model.Allocation
-import net.micode.airportgate.model.AllocationOutcome
-import net.micode.airportgate.model.AssignmentRow
-import net.micode.airportgate.model.DayFlight
-import net.micode.airportgate.model.FlightDraft
-import net.micode.airportgate.model.GateForEngine
-import net.micode.airportgate.model.GateUsageRow
-import net.micode.airportgate.model.timeToMinutes
+import net.micode.airportgate.data.model.Allocation
+import net.micode.airportgate.data.model.AllocationOutcome
+import net.micode.airportgate.data.model.AssignmentRow
+import net.micode.airportgate.data.model.DayFlight
+import net.micode.airportgate.data.model.FlightDraft
+import net.micode.airportgate.data.model.GateForEngine
+import net.micode.airportgate.data.model.GateUsageRow
+import net.micode.airportgate.data.model.timeToMinutes
 
 // ========================= 引擎 <-> 界面 / 数据库 数据适配 =========================
 

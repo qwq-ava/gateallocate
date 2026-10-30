@@ -31,7 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import net.micode.airportgate.model.GateSlot
+import net.micode.airportgate.data.model.GateSlot
 import net.micode.airportgate.ui.gantt.GanttLegend
 import net.micode.airportgate.ui.theme.BgGray
 import net.micode.airportgate.ui.theme.TextMain

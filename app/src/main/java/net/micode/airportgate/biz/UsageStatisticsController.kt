@@ -1,24 +1,24 @@
-package net.micode.airportgate.domain
+package net.micode.airportgate.biz
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import net.micode.airportgate.domain.stats.GateUtilizationCalculator
-import net.micode.airportgate.domain.stats.SqliteStatsDataSource
-import net.micode.airportgate.domain.stats.UtilizationResult
+import net.micode.airportgate.biz.stats.GateUtilizationCalculator
+import net.micode.airportgate.biz.stats.SqliteStatsDataSource
+import net.micode.airportgate.biz.stats.UtilizationResult
 import java.util.Calendar
 
 /**
  * 控制层（业务逻辑层）：统计业务协调者。
  *
  * 承接「按页签算时间窗口 -> 调统计计算模块 -> 返回原始计算结果」，
- * 使 ui/stats/StatsScreen 只负责把 UtilizationResult 映射成展示模型并渲染。
+ * 使 ui/stats/UsageAnalysisUI 只负责把 UtilizationResult 映射成展示模型并渲染。
  *
  * 说明：统计计算在 Dispatchers.IO 执行，避免阻塞 UI 线程读取 SQLite；
  * 展示层映射（UtilizationResult.toStatsData，含界面主题色）保留在 ui/stats，
  * 以避免 domain 层反向依赖 ui 主题。
  */
-object StatsService {
+object UsageStatisticsController {
     /**
      * 计算某个页签（0=今日实时 / 1=近 7 日 / 2=本月）的利用率统计。
      * @return 原始计算结果 UtilizationResult（不含界面主题色等展示细节）
