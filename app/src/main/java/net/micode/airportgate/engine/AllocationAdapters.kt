@@ -1,5 +1,6 @@
 package net.micode.airportgate.engine
 
+import net.micode.airportgate.engine.GateAllocationEngine
 import net.micode.airportgate.model.Allocation
 import net.micode.airportgate.model.AllocationOutcome
 import net.micode.airportgate.model.AssignmentRow
@@ -43,14 +44,19 @@ fun countConflicts(flights: List<DayFlight>): Int {
  */
 fun reallocateAll(
     flights: List<FlightDraft>,
-    gates: List<GateForEngine>
+    gates: List<GateForEngine>,
+    existing: List<GateAllocationEngine.Occupancy> = emptyList()
 ): Pair<List<DayFlight>, AllocationOutcome> {
     val conflictBefore = 0 // 重排前无既有机位占用，冲突基准记为 0
 
+    // 预置占用（如跨夜后段）的航班不再交给引擎重新摆放，避免与「前段」分到不同机位
+    val engineFlights = if (existing.isEmpty()) flights
+    else flights.filter { f -> existing.none { it.flight.flightNo == f.flightNo } }
+
     val result = GateAllocationEngine.startAutoAllocation(
-        flights.map { it.toFlightIn() },
+        engineFlights.map { it.toFlightIn() },
         gates.map { it.toGateIn() },
-        emptyList()
+        existing
     )
 
     // 保留航班的航线/机型等原始信息，仅更新机位与廊桥属性
