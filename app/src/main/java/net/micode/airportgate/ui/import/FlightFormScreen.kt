@@ -177,13 +177,16 @@ fun FlightFormScreen(
                 ) {
                     Column {
                         Text(
-                            active.label,
+                            if (tabs.size > 1) active.label else "航班信息（按时间排序）",
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = Blue
                         )
                         Spacer(Modifier.height(2.dp))
-                        Text(date, fontSize = 11.sp, color = TextSub)
+                        Text(
+                            if (tabs.size > 1) date else "今日 / 明日合并展示",
+                            fontSize = 11.sp, color = TextSub
+                        )
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
@@ -279,8 +282,8 @@ fun FlightFormScreen(
                 }
                 Spacer(Modifier.width(8.dp))
                 Button(
-                    onClick = { onSubmit(tabs.associate { it.date to it.rows.toList() }) },
-                    enabled = tabs.any { it.rows.isNotEmpty() },
+                    onClick = { onSubmit(active.rows.groupBy { it.belongDate }.mapValues { it.value.toList() }) },
+                    enabled = active.rows.isNotEmpty(),
                     modifier = Modifier
                         .weight(1.2f)
                         .height(44.dp),
@@ -328,6 +331,8 @@ private fun FlightCard(
                     }
                     Spacer(Modifier.width(8.dp))
                     Text("航班 $index", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextMain)
+                    Spacer(Modifier.width(8.dp))
+                    DayTag(row.belongDate)
                     Spacer(Modifier.weight(1f))
                     Surface(color = Color(0xFFEDEFF2), shape = RoundedCornerShape(6.dp)) {
                         Text("已飞完", fontSize = 11.sp, color = TextSub, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
@@ -391,6 +396,8 @@ private fun FlightCard(
                     }
                     Spacer(Modifier.width(8.dp))
                     Text("航班 $index", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextMain)
+                    Spacer(Modifier.width(8.dp))
+                    DayTag(row.belongDate)
                     Spacer(Modifier.weight(1f))
                     IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
                         Icon(
@@ -514,6 +521,28 @@ private fun FlightCard(
                 )
             }
         }
+    }
+}
+
+/** 卡片顶部的小标签：标识该航班属于「今日」还是「明日」（合表后区分来源） */
+@Composable
+private fun DayTag(belongDate: String) {
+    val isToday = belongDate == dateOf(0)
+    val text = when (belongDate) {
+        dateOf(0) -> "今日"
+        dateOf(1) -> "明日"
+        else -> belongDate
+    }
+    Surface(
+        color = if (isToday) Color(0xFFE6F4EA) else Color(0xFFE8F0FE),
+        shape = RoundedCornerShape(6.dp)
+    ) {
+        Text(
+            text,
+            fontSize = 11.sp,
+            color = if (isToday) Color(0xFF1E8E3E) else Blue,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+        )
     }
 }
 

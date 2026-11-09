@@ -48,6 +48,7 @@ import net.micode.airportgate.model.ImportRecord
 import net.micode.airportgate.model.dateOf
 import net.micode.airportgate.model.isFlightFlown
 import net.micode.airportgate.model.nextDate
+import net.micode.airportgate.model.timeToMinutes
 import net.micode.airportgate.ui.components.AppCard
 import net.micode.airportgate.ui.components.SectionTitle
 import net.micode.airportgate.ui.components.StatusChip
@@ -78,9 +79,8 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
     var mergedFrontDates by remember { mutableStateOf(mapOf<String, String>()) }
 
     // 表格数据放在这一层，关闭表格再进来时填写内容不会丢
-    // 信息更改模式需要「今天 / 明天」两份数据；新建导入只用「明天」
-    val rowsToday = remember { mutableStateListOf<FlightDraft>() }
-    val rowsTomorrow = remember { mutableStateListOf<FlightDraft>() }
+    // 信息更改 / 新建导入统一用一张「今日+明日合并、按时间排序」的表
+    val rowsMerged = remember { mutableStateListOf<FlightDraft>() }
 
     val requiredFields = listOf(
         "航班号", "航班日期", "进出港", "机型", "到达时刻", "离开时刻", "起降机场"
@@ -96,7 +96,7 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
     // ---- 打开表格 ----
     fun openForm(mode: FlightFormMode) {
         if (mode == FlightFormMode.EDIT) {
-            // 信息更改：今天 + 明天两页；今天已飞完的航班锁定为只读
+            // 信息更改：今天 + 明天合并成一张按时间排序的表；今天已飞完的航班锁定为只读
             val today = dateOf(0)
             val tomorrow = dateOf(1)
             val dayAfter = dateOf(2)
@@ -110,10 +110,8 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
                 .map { it.copy(locked = isFlightFlown(dayAfter, it.departureTime)) }
 
             // 跨夜航班在库里被拆成两段：前段「到达→24:00」落在日 D，后段「0:00→离开」落在 D+1。
-            // 信息更改页签只有今天(D0)/明天(D1)两页，但跨夜航班的前段可能在 D0 或 D1：
-            //   - 前段在 D0 → 后段在 D1（页签内可见）→ 合并后整体可改；
-            //   - 前段在 D1（多数情况：手工录的是「明天」航班）→ 后段在 D2（不在页签内）
-            // 因此对「今天」「明天」两页各自做跨夜合并，并把后段从其所在页移除（避免同一航班出现在两个页签）。
+            // 合表后每条航班带着自己的「主落库日」(belongDate=前段日)，落库时据此分组，
+            // 跨天航班仍由 ImportService.submit 自动拆后段到次日，无需关心页签。
             // mergedFrontDatesLocal 记录每个跨夜航班的「前段日期」，删除或改成不跨夜时据此清掉两段。
             val mergedFrontDatesLocal = mutableMapOf<String, String>()
 
@@ -123,13 +121,15 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
                     val back = backByNo[front.flightNo]
                     if (front.departureTime == "24:00" && back != null) {
                         mergedFrontDatesLocal[front.flightNo] = frontDate
-                        // 合并：到达取前段、离开取后段；可编辑性以后段所在日(次日)是否已飞完为准
+                        // 合并：到达取前段、离开取后段；可编辑性以后段所在日(次日)是否已飞完为准；
+                        // belongDate 记前段所在日，保证落库与后续删/改定位一致
                         front.copy(
                             departureTime = back.departureTime,
-                            locked = front.locked || isFlightFlown(backDate, back.departureTime)
+                            locked = front.locked || isFlightFlown(backDate, back.departureTime),
+                            belongDate = frontDate
                         )
                     } else {
-                        front
+                        front.copy(belongDate = frontDate)
                     }
                 }
             }
@@ -144,8 +144,10 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
                 .toSet()
             val mergedTomorrow = mergedTomorrowRaw.filterNot { consumedInTomorrow.contains(it.flightNo) }
 
-            rowsToday.clear(); rowsToday.addAll(mergedToday)
-            rowsTomorrow.clear(); rowsTomorrow.addAll(mergedTomorrow)
+            // 合并成一张表，先按「主落库日」再按「到达时刻」升序排序（今日全在前、明日全在后，各自按时间）
+            val mergedAll = (mergedToday + mergedTomorrow)
+                .sortedWith(compareBy({ it.belongDate }, { timeToMinutes(it.arrivalTime) ?: Int.MAX_VALUE }))
+            rowsMerged.clear(); rowsMerged.addAll(mergedAll)
             mergedOvernightNos = mergedFrontDatesLocal.keys
             mergedFrontDates = mergedFrontDatesLocal.toMap()
             if (todayFlights.isEmpty() && tomorrowFlights.isEmpty() && dayAfterFlights.isEmpty()) {
@@ -154,9 +156,9 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
         } else {
             mergedOvernightNos = emptySet()
             mergedFrontDates = emptyMap()
-            if (rowsTomorrow.isEmpty()) {
-                // 卡片式一屏一条，先给 1 条，其余用「复制新增」快速加
-                rowsTomorrow.add(FlightDraft(id = System.nanoTime()))
+            if (rowsMerged.isEmpty()) {
+                // 卡片式一屏一条，先给 1 条，其余用「复制新增」快速加；belongDate 默认为明天
+                rowsMerged.add(FlightDraft(id = System.nanoTime()))
             }
         }
         formMode = mode
@@ -227,15 +229,9 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
 
     if (formMode != null) {
         val mode = formMode!!
-        // 新建导入仅「明天」一页；信息更改为「今天 / 明天」两页
-        val tabs = if (mode == FlightFormMode.EDIT) {
-            listOf(
-                FlightFormTab(dateOf(0), "今天航班信息", rowsToday),
-                FlightFormTab(dateOf(1), "明天航班信息", rowsTomorrow)
-            )
-        } else {
-            listOf(FlightFormTab(dateOf(1), "明天航班信息", rowsTomorrow))
-        }
+        // 信息更改 / 新建导入统一为一张「航班信息」表（今日+明日合并、按时间排序），
+        // 每条航班通过 belongDate 记住各自的主落库日，落库时按日分组
+        val tabs = listOf(FlightFormTab(dateOf(0), "航班信息", rowsMerged))
         FlightFormScreen(
             mode = mode,
             tabs = tabs,
