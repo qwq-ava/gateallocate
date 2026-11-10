@@ -1,13 +1,14 @@
-package net.micode.airportgate.biz
+package net.micode.airportgate.control
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.micode.airportgate.data.db.GateRepository
-import net.micode.airportgate.biz.engine.GateAllocationEngine
-import net.micode.airportgate.biz.engine.reallocateAll
-import net.micode.airportgate.biz.engine.toAssignmentRows
-import net.micode.airportgate.biz.engine.toUsageRows
+import net.micode.airportgate.control.engine.GateAllocationEngine
+import net.micode.airportgate.control.engine.matchKey
+import net.micode.airportgate.control.engine.reallocateAll
+import net.micode.airportgate.control.engine.toAssignmentRows
+import net.micode.airportgate.control.engine.toUsageRows
 import net.micode.airportgate.data.model.DayFlight
 import net.micode.airportgate.data.model.GanttDay
 import net.micode.airportgate.data.model.GateInfoStore
@@ -37,6 +38,13 @@ data class TimelineResult(
 object AllocationService {
     /** 连续时间轴最多展开的天数，防止远期航班把轴拉得过长 */
     private const val MAX_TIMELINE_DAYS = 7
+
+    /**
+     * 甘特图最多补多少个「空闲机位行」。
+     * 真实机位档案有 125 个，全部画成行会让 Canvas 高度超出 GPU 纹理上限；
+     * 有航班占用的机位始终全画，其余只补少量空闲机位，完整清单在「机位信息维护」页查看。
+     */
+    private const val GANTT_IDLE_GATE_ROWS = 12
     /**
      * 执行一次完整分配。引擎计算在 Dispatchers.Default 执行，避免阻塞 UI。
      * @param context 上下文
@@ -115,14 +123,18 @@ object AllocationService {
             )
         }
         // 3) 回写航班：机位编号 + 状态（待分配 -> 已分配）
+        // 同号进港/出港是两条独立记录，按「航班号 + 占用起止」匹配各自引擎结果，
+        // 否则两条都会被写成第一条的机位，甘特图会出现同机位重叠的假冲突。
         drafts.forEach { f ->
-            val a = outcome.assignments.firstOrNull { it.flightNo == f.flightNo }
+            val key = f.matchKey()
+            val a = outcome.assignments.firstOrNull { it.matchKey() == key }
             if (a != null) GateRepository.markFlightAssigned(context, f.id, a.gate)
         }
         // 收集本日跨夜前段（离开=24:00）的机位，供次日后段固定
         val frontGates = drafts.filter { it.departureTime == "24:00" }
             .mapNotNull { f ->
-                outcome.assignments.firstOrNull { it.flightNo == f.flightNo }?.gate
+                val key = f.matchKey()
+                outcome.assignments.firstOrNull { it.matchKey() == key }?.gate
                     ?.let { g -> f.flightNo to g }
             }.toMap()
         return DayAllocateOutcome(
@@ -232,9 +244,11 @@ object AllocationService {
             val r = dayFlights(context, d)
             GanttDay(d, r.flights, r.failedFlightNos)
         }
-        // 机位行 = 当前可用机位 + 所有日期出现过的历史占用机位（停用/维护机位的历史色块不丢失）
-        val codes = (GateInfoStore.loadAvailableForEngine(context).map { it.code } +
-            days.flatMap { day -> day.flights.map { it.gate } }).distinct()
+        // 机位行 = 所有日期出现过的占用机位（含后来停用/维护的历史机位）+ 少量空闲机位。
+        // 真实档案 125 个机位不能全画，否则 Canvas 过高；完整清单在机位信息维护页。
+        val available = GateInfoStore.loadAvailableForEngine(context).map { it.code }
+        val occupied = days.flatMap { day -> day.flights.map { it.gate } }.distinct()
+        val codes = (occupied + available.filter { it !in occupied }.take(GANTT_IDLE_GATE_ROWS)).distinct()
         TimelineResult(days, codes)
     }
 }

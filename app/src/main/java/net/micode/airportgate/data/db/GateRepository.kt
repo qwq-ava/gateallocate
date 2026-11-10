@@ -149,7 +149,9 @@ object GateRepository {
                     origin = it.getString(7),
                     dest = it.getString(8),
                     gateNo = if (it.isNull(9)) "" else it.getString(9),
-                    status = if (it.isNull(10)) "" else it.getString(10)
+                    status = if (it.isNull(10)) "" else it.getString(10),
+                    // 查询条件就是 flight_date=?，回显时显式带上，避免落到 FlightDraft 默认的「明天」
+                    belongDate = date
                 )
             }
         }
@@ -215,7 +217,9 @@ object GateRepository {
                     origin = it.getString(6),
                     dest = it.getString(7),
                     gateNo = if (it.isNull(8)) "" else it.getString(8),
-                    status = if (it.isNull(9)) "" else it.getString(9)
+                    status = if (it.isNull(9)) "" else it.getString(9),
+                    // 同上：待分配清单也必须带上真实归属日期
+                    belongDate = date
                 )
             }
         }

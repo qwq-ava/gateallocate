@@ -1,4 +1,4 @@
-package net.micode.airportgate.biz.engine
+package net.micode.airportgate.control.engine
 
 import net.micode.airportgate.data.model.Allocation
 import net.micode.airportgate.data.model.AllocationOutcome
@@ -10,6 +10,25 @@ import net.micode.airportgate.data.model.GateUsageRow
 import net.micode.airportgate.data.model.timeToMinutes
 
 // ========================= 引擎 <-> 界面 / 数据库 数据适配 =========================
+
+/**
+ * 分配结果的回写匹配键：航班号 + 占用起止（当日分钟）。
+ *
+ * 真实航班数据中存在「过站航班」——同一航班号同时有进港、出港两条记录。
+ * 仅用 flightNo 作键时，associateBy / firstOrNull 只会命中其中一条，
+ * 导致两条被回写同一个机位，甘特图误判为同机位时段重叠（假冲突）。
+ * 引擎 FlightIn 只带 flightNo，无法区分方向，因此在适配层用占用窗口补全唯一性。
+ */
+fun flightMatchKey(flightNo: String, startMin: Int, endMin: Int) =
+    Triple(flightNo, startMin, endMin)
+
+fun FlightDraft.matchKey() = flightMatchKey(
+    flightNo,
+    timeToMinutes(arrivalTime) ?: 0,
+    timeToMinutes(departureTime) ?: 0
+)
+
+fun Allocation.matchKey() = flightMatchKey(flightNo, startMin, endMin)
 
 /** FlightDraft（t_flight 行）-> 引擎航班输入（到达/离开时刻转当日分钟） */
 fun FlightDraft.toFlightIn(): GateAllocationEngine.FlightIn {
@@ -58,10 +77,11 @@ fun reallocateAll(
         existing
     )
 
-    // 保留航班的航线/机型等原始信息，仅更新机位与廊桥属性
-    val byFlightNo = flights.associateBy { it.flightNo }
+    // 保留航班的航线/机型等原始信息，仅更新机位与廊桥属性。
+    // 用「航班号 + 占用起止」匹配，避免同号进港/出港互相覆盖（过站航班）。
+    val byKey = flights.associateBy { it.matchKey() }
     val newFlights = result.assignments.map { a ->
-        val origin = byFlightNo[a.flightNo]
+        val origin = byKey[flightMatchKey(a.flightNo, a.startMin, a.endMin)]
         DayFlight(
             flightNo = a.flightNo,
             gate = a.gate,
@@ -116,9 +136,10 @@ fun toAssignmentRows(
     operator: String = "系统",
     version: Int = 1
 ): List<AssignmentRow> {
-    val byFlightNo = flights.associateBy { it.flightNo }
+    // 同号进港/出港是两条独立记录，必须按占用窗口区分，否则 direction / 机型会取错一条
+    val byKey = flights.associateBy { it.matchKey() }
     return outcome.assignments.map { a ->
-        val f = byFlightNo[a.flightNo]
+        val f = byKey[a.matchKey()]
         AssignmentRow(
             flightNo = a.flightNo,
             date = date,

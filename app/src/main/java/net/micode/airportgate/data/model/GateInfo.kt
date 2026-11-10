@@ -8,15 +8,17 @@ import java.util.UUID
 
 // ========================= 机位信息表数据模型 =========================
 //
-// 字段口径按组长给分配引擎的约定对齐（2026-10-15）：
-//   bridge          明确枚举「廊桥 / 远机位」，引擎据此做「宽体优先廊桥」
-//   aircraftClass   系列名列表（A330,A320,B737），引擎做包含匹配，不比翼展/长度数值
-//   minInterval     安全间隔（分钟），由引擎按机位读取，取代写死的全局 15 分钟
-//   openTime/closeTime  可用时段，航班占用窗口必须落在其中
+// 字段口径（2026-11-10 按天津滨海机场真实停机位数据对齐）：
+//   gateType        停机位种类 = 真实「功能用途」17 种（CSV function 列），界面下拉选择
+//   aircraftClass   可停靠机型 = ICAO 等级 A/B/C/D/E/F（可多选，CSV aircraft_class 列）
+//   bridge          内部标记「廊桥 / 远机位」，由 gateType 自动同步，供引擎做「宽体优先廊桥」
+//   area/terminal/zone/remark  真实附加信息（东区/西区、T1/T2、机坪分区、备注）
+//   minInterval     安全间隔（分钟）、openTime/closeTime 可用时段：无公开数据，属仿真参数
 //   status          可用 / 维护 / 停用，引擎只分配「可用」的机位
 //
-// 持久化（v4 起）：SQLite t_gate，由 data.db.GateInfoRepository 负责读写；
-// 首次无数据时写入默认示例，并把 v3 残留在 SharedPreferences 的旧数据迁移过来。
+// 持久化：SQLite t_gate（v7 新增上述真实字段），由 data.db.GateInfoRepository 读写。
+// 首次启动写入 RealGateData 的 125 条逐编号真实机位；库中仅有旧版 6 条示例数据时
+// 一次性替换，不覆盖用户后续自定义编辑。
 
 data class GateInfoRow(
     val id: String = "",
@@ -26,24 +28,30 @@ data class GateInfoRow(
     val minInterval: Int = GateInfoOptions.DEFAULT_INTERVAL,
     val openTime: String = "06:00",
     val closeTime: String = "23:00",
-    val status: String = GateInfoOptions.STATUS_AVAILABLE
+    val status: String = GateInfoOptions.STATUS_AVAILABLE,
+    // ---- 真实停机位档案字段（t_gate v7）----
+    val gateType: String = GateInfoOptions.DEFAULT_GATE_TYPE,
+    val area: String = "",
+    val terminal: String = "",
+    val zone: String = "",
+    val remark: String = ""
 ) {
-    /** 系列名列表：「A330,A320,B737」-> [A330, A320, B737] */
+    /** 可停靠机型等级列表：「C,D」-> [C, D]（兼容历史遗留的系列名写法） */
     val aircraftClasses: List<String>
         get() = aircraftClass.split(",", "，").map { it.trim() }.filter { it.isNotEmpty() }
 
     /** 是否廊桥机位（引擎据此宽体优先廊桥） */
     val isBridge: Boolean get() = bridge == GateInfoOptions.BRIDGE
 
-    /** 可用时段起止，转为当日分钟数 0–1439，引擎直接算区间 */
+    /** 可用时段起止，转为当日分钟数 0–1440（24:00 记为 1440，表示全天开放） */
     val openMin: Int get() = timeToMinutes(openTime) ?: 0
-    val closeMin: Int get() = timeToMinutes(closeTime) ?: 1439
+    val closeMin: Int get() = timeToMinutes(closeTime) ?: 1440
 
     /** 引擎只分配「可用」的机位 */
     val available: Boolean get() = status == GateInfoOptions.STATUS_AVAILABLE
 
-    /** 该机位能否停靠某机型系列（包含匹配，不做数值比较） */
-    fun accepts(series: String): Boolean = series in aircraftClasses
+    /** 机位允许的等级（或历史系列名）是否包含给定值 */
+    fun accepts(value: String): Boolean = value in aircraftClasses
 
     /** 可用时段是否容纳给定占用窗口（引擎排机位前的硬约束） */
     fun containsWindow(startMin: Int, endMin: Int): Boolean =
@@ -52,17 +60,30 @@ data class GateInfoRow(
 
 /** 机位信息表的选项常量（下拉选择范围） */
 object GateInfoOptions {
-    // 停机位种类：用明确枚举而非布尔，避免 true/false 语义不明
+    // 内部廊桥标记：引擎据此做「宽体优先廊桥」，主表不再直接展示这一列
     const val BRIDGE = "廊桥"
     const val REMOTE = "远机位"
     val BRIDGE_TYPES = listOf(BRIDGE, REMOTE)
 
-    /** 可停靠机型系列名（与航班录入界面的机型下拉保持一致） */
-    val AIRCRAFT_SERIES = listOf(
-        "A319", "A320", "A320neo", "A321", "A321neo",
-        "A330-200", "A330-300", "A350-900",
-        "B737-800", "B737 MAX 8", "B787-9", "B777-300ER"
+    /** 停机位种类：CSV function 列去重后的 17 种真实功能用途 */
+    val GATE_TYPES: List<String> get() = RealGateData.GATE_TYPES
+    const val DEFAULT_GATE_TYPE = "国内航班廊桥机位"
+
+    /** 可停靠机型：ICAO 机型等级 A–F（CSV 实际出现 B/C/D/E/F，A 作为可选等级保留） */
+    val AIRCRAFT_CLASSES = listOf("A", "B", "C", "D", "E", "F")
+
+    /** 等级对应的代表机型，仅用于下拉提示，不参与引擎匹配 */
+    val GRADE_HINT = mapOf(
+        "A" to "小型通用航空器",
+        "B" to "支线机／公务机",
+        "C" to "A320 / B737",
+        "D" to "B757 / B767",
+        "E" to "A330 / A350 / B787 / B777",
+        "F" to "A380 / B747-8"
     )
+
+    /** 由真实种类自动同步内部廊桥标记，保证引擎判断与界面选择一致 */
+    fun bridgeOf(gateType: String): String = if ("廊桥" in gateType) BRIDGE else REMOTE
 
     // 状态：可用 / 维护 / 停用
     const val STATUS_AVAILABLE = "可用"
@@ -70,7 +91,7 @@ object GateInfoOptions {
     const val STATUS_DISABLED = "停用"
     val STATUS_TYPES = listOf(STATUS_AVAILABLE, STATUS_MAINTENANCE, STATUS_DISABLED)
 
-    /** 默认安全间隔（分钟）；实际值由各机位自行维护 */
+    /** 默认安全间隔（分钟）；公开资料无机位级数据，属仿真参数 */
     const val DEFAULT_INTERVAL = 20
 }
 
@@ -101,29 +122,38 @@ private fun GateInfoRow.toEngine() = GateForEngine(
  * 因此机位维护界面、统计界面、分配引擎都不需要改动。
  */
 object GateInfoStore {
-    /** 首次启动的默认示例数据（覆盖廊桥/远机位、各机型系列、各状态、不同安全间隔） */
-    fun defaultRows(): List<GateInfoRow> = listOf(
-        GateInfoRow("g1", "B27", GateInfoOptions.BRIDGE, "A320,A321,A320neo", 20, "06:00", "23:00", GateInfoOptions.STATUS_AVAILABLE),
-        GateInfoRow("g2", "208", GateInfoOptions.BRIDGE, "A330-200,A330-300,A350-900,B787-9,B777-300ER", 25, "06:00", "23:00", GateInfoOptions.STATUS_AVAILABLE),
-        GateInfoRow("g3", "C05", GateInfoOptions.REMOTE, "A321,A320neo,B737 MAX 8", 15, "06:00", "23:00", GateInfoOptions.STATUS_AVAILABLE),
-        GateInfoRow("g4", "C08", GateInfoOptions.REMOTE, "A319,A320,B737-800", 15, "06:00", "23:00", GateInfoOptions.STATUS_MAINTENANCE),
-        GateInfoRow("g5", "D12", GateInfoOptions.REMOTE, "A350-900,B777-300ER,B787-9", 30, "06:00", "23:00", GateInfoOptions.STATUS_DISABLED),
-        GateInfoRow("g6", "T2-14", GateInfoOptions.REMOTE, "A321,A320neo,B737-800", 20, "06:00", "23:00", GateInfoOptions.STATUS_AVAILABLE)
-    )
+    /** 首次启动 / 恢复用的默认数据：天津滨海机场 125 个逐编号真实机位 */
+    fun defaultRows(): List<GateInfoRow> = RealGateData.ROWS
 
-    /** 读取全部机位：库里有数据直接返回；库空则迁移旧 SharedPreferences 或写入默认数据 */
+    /** 读取全部机位：库空或仍是旧版示例数据时，一次性换成真实 125 条 */
     fun load(context: Context): List<GateInfoRow> {
         val rows = GateInfoRepository.loadAll(context)
-        if (rows.isNotEmpty()) return rows
-        // 首次：先尝试迁移 v3 残留在 SharedPreferences 的数据，否则落默认数据
-        val base = migrateFromPrefs(context).ifEmpty { defaultRows() }
-        GateInfoRepository.replaceAll(context, base)
-        return base
+        if (rows.isEmpty()) {
+            // 首次：先尝试迁移 v3 残留在 SharedPreferences 的数据，否则落真实数据
+            val base = migrateFromPrefs(context).ifEmpty { defaultRows() }
+            GateInfoRepository.replaceAll(context, base)
+            return base
+        }
+        // 旧的 6 条演示机位（B27/208/C05/C08/D12/T2-14）整体替换为权威数据。
+        // 只要用户加过任何一个自定义编号，就保留用户数据不被覆盖。
+        if (rows.all { it.code in RealGateData.LEGACY_CODES }) {
+            val base = defaultRows()
+            GateInfoRepository.replaceAll(context, base)
+            return base
+        }
+        return rows
     }
 
-    /** 保存（机位维护界面「确定」时整表替换） */
+    /** 保存（机位维护界面「确定」时整表替换，含全部真实字段） */
     fun save(context: Context, rows: List<GateInfoRow>) {
         GateInfoRepository.replaceAll(context, rows)
+    }
+
+    /** 手动恢复为 125 条真实机位数据（概览页按钮，界面上需二次确认） */
+    fun resetToRealData(context: Context): List<GateInfoRow> {
+        val base = defaultRows()
+        GateInfoRepository.replaceAll(context, base)
+        return base
     }
 
     // ---------------- 给分配引擎的入口 ----------------
@@ -163,7 +193,12 @@ object GateInfoStore {
                 closeTime = o.optString("closeTime", "23:00"),
                 status = migrateStatus(
                     o.optString("status", GateInfoOptions.STATUS_AVAILABLE)
-                )
+                ),
+                gateType = o.optString("gateType", GateInfoOptions.DEFAULT_GATE_TYPE),
+                area = o.optString("area", ""),
+                terminal = o.optString("terminal", ""),
+                zone = o.optString("zone", ""),
+                remark = o.optString("remark", "")
             )
         }
         out

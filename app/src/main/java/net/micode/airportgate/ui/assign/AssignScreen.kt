@@ -1,8 +1,6 @@
 package net.micode.airportgate.ui.assign
 
 import android.content.pm.ActivityInfo
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,14 +8,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,18 +24,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import net.micode.airportgate.biz.AllocationReadiness
-import net.micode.airportgate.biz.AllocationService
-import net.micode.airportgate.biz.TimelineResult
+import net.micode.airportgate.control.AllocationReadiness
+import net.micode.airportgate.control.AllocationService
+import net.micode.airportgate.control.TimelineResult
 import net.micode.airportgate.data.model.DataSync
 import net.micode.airportgate.data.model.GateSlot
 import net.micode.airportgate.data.model.MINUTES_PER_DAY
@@ -54,7 +47,6 @@ import net.micode.airportgate.ui.gantt.FullscreenGanttDialog
 import net.micode.airportgate.ui.gantt.GanttCard
 import net.micode.airportgate.ui.gantt.SlotDetailDialog
 import net.micode.airportgate.ui.theme.Blue
-import net.micode.airportgate.ui.theme.BlueLight
 import net.micode.airportgate.ui.theme.ConflictRed
 import net.micode.airportgate.ui.theme.TextSub
 
@@ -65,10 +57,10 @@ fun AssignScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val today = remember { dateOf(0) }
 
-    // 「一键分配」的目标日期：0=今天，1=明天。只决定分配写到哪天，
-    // 甘特图始终是一张从今天起的连续多日时间轴，不再随这里切换。
-    var opOffset by remember { mutableStateOf(1) }
-    val opDate = dateOf(opOffset)
+    // 「一键分配」的目标日期固定为明天（与「数据导入」默认落库日一致）。
+    // 只决定分配写到哪天；甘特图始终是一张从今天起的连续多日时间轴，
+    // 页面上不再提供「今天 / 明天」切换按钮。
+    val opDate = dateOf(1)
 
     // ---- 甘特图交互状态 ----
     var showFullGantt by remember { mutableStateOf(false) }
@@ -95,7 +87,7 @@ fun AssignScreen(onBack: () -> Unit) {
         selectedSlot = null
     }
 
-    // 切换分配目标日 / 数据版本变化（导入航班、维护机位后 DataSync.bump()）时只读回显，
+    // 数据版本变化（导入航班、维护机位后 DataSync.bump()）时只读回显，
     // 绝不自动分配——分配动作始终由用户点击「一键分配」触发。
     LaunchedEffect(opDate, dataVersion) { refresh(opDate) }
 
@@ -105,8 +97,7 @@ fun AssignScreen(onBack: () -> Unit) {
 
     val scope = rememberCoroutineScope()
 
-    // 真正执行一次分配（点击「一键分配」时调用）。
-    // 记录目标日期，避免分配过程中切换日期导致结果串到另一天上。
+    // 真正执行一次分配（点击「一键分配」时调用）。目标日期固定为明天，不再需要防串日判断。
     fun runAllocation() {
         if (allocating || !canAllocate) return
         val targetDate = opDate
@@ -115,11 +106,9 @@ fun AssignScreen(onBack: () -> Unit) {
             try {
                 val res = AllocationService.allocate(context, targetDate)
                 delay(300) // 让「分配中」状态可见
-                if (opDate == targetDate) {
-                    // 重新回读整条时间轴：跨夜后段等次日结果也能立刻显示在图上
-                    refresh(targetDate)
-                    lastFailed = res.failedFlightNos
-                }
+                // 重新回读整条时间轴：跨夜后段等次日结果也能立刻显示在图上
+                refresh(targetDate)
+                lastFailed = res.failedFlightNos
             } finally {
                 allocating = false
             }
@@ -155,39 +144,6 @@ fun AssignScreen(onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize()) {
         SubTopBar("机位分配", onBack)
-
-        // ---- 分配日期：只影响「一键分配」的落库日期，不影响下面那张连续甘特图 ----
-        Surface(color = Color.White, shadowElevation = 1.dp) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("分配日期", fontSize = 12.sp, color = TextSub)
-                Spacer(Modifier.width(10.dp))
-                listOf(0 to "今天", 1 to "明天").forEach { (offset, label) ->
-                    val active = opOffset == offset
-                    Text(
-                        "$label ${dateOf(offset)}",
-                        fontSize = 12.sp,
-                        color = if (active) Blue else TextSub,
-                        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(if (active) BlueLight else Color.Transparent)
-                            .clickable(enabled = !allocating) {
-                                if (opOffset != offset) {
-                                    showFullGantt = false
-                                    opOffset = offset
-                                }
-                            }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                }
-            }
-        }
 
         Column(
             Modifier

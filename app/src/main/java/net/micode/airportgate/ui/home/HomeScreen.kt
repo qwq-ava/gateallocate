@@ -26,7 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
-import net.micode.airportgate.Screen
+import net.micode.airportgate.ui.Screen
 import net.micode.airportgate.data.db.GateRepository
 import net.micode.airportgate.data.model.FlightDraft
 import net.micode.airportgate.data.model.FlightItem
@@ -37,7 +37,6 @@ import net.micode.airportgate.data.model.todayWithWeekday
 import net.micode.airportgate.ui.components.AppCard
 import net.micode.airportgate.ui.components.FlightRow
 import net.micode.airportgate.ui.components.SectionTitle
-import net.micode.airportgate.ui.theme.BgGray
 import net.micode.airportgate.ui.theme.Blue
 import net.micode.airportgate.ui.theme.Green
 import net.micode.airportgate.ui.theme.TextMain
@@ -89,8 +88,6 @@ fun HomeScreen(onNavigate: (Screen) -> Unit, showMsg: (String) -> Unit) {
                 .background(Blue)
                 .padding(horizontal = 20.dp, vertical = 18.dp)
         ) {
-            Text("XX机场", color = Color(0xCCFFFFFF), fontSize = 14.sp)
-            Spacer(Modifier.height(4.dp))
             Text("航班机位分配", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(10.dp))
             Text(

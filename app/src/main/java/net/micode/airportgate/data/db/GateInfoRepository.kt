@@ -30,21 +30,32 @@ object GateInfoRepository {
         val out = mutableListOf<GateInfoRow>()
         val c = db(context).rawQuery(
             "SELECT ${g.C_ROW_ID},${g.C_CODE},${g.C_BRIDGE},${g.C_AIRCRAFT_CLASS}," +
-                "${g.C_MIN_INTERVAL},${g.C_OPEN_TIME},${g.C_CLOSE_TIME},${g.C_STATUS} " +
+                "${g.C_MIN_INTERVAL},${g.C_OPEN_TIME},${g.C_CLOSE_TIME},${g.C_STATUS}," +
+                "${g.C_GATE_TYPE},${g.C_AREA},${g.C_TERMINAL},${g.C_ZONE},${g.C_REMARK} " +
                 "FROM ${g.TABLE} ORDER BY ${g.C_CODE} ASC",
             null
         )
         c.use {
             while (it.moveToNext()) {
+                val bridge = it.getString(2)
+                // v7 之前写入的旧行没有真实种类，按内部廊桥标记兜底，避免下拉里出现空白
+                val rawType = if (it.isNull(8)) "" else it.getString(8)
                 out += GateInfoRow(
                     id = it.getString(0),
                     code = it.getString(1),
-                    bridge = it.getString(2),
+                    bridge = bridge,
                     aircraftClass = it.getString(3),
                     minInterval = it.getInt(4),
                     openTime = it.getString(5),
                     closeTime = it.getString(6),
-                    status = it.getString(7)
+                    status = it.getString(7),
+                    gateType = rawType.ifEmpty {
+                        if (bridge == GateInfoOptions.BRIDGE) "国内航班廊桥机位" else "国内航班远机位"
+                    },
+                    area = if (it.isNull(9)) "" else it.getString(9),
+                    terminal = if (it.isNull(10)) "" else it.getString(10),
+                    zone = if (it.isNull(11)) "" else it.getString(11),
+                    remark = if (it.isNull(12)) "" else it.getString(12)
                 )
             }
         }
@@ -71,6 +82,11 @@ object GateInfoRepository {
                     put(g.C_OPEN_TIME, r.openTime)
                     put(g.C_CLOSE_TIME, r.closeTime)
                     put(g.C_STATUS, r.status)
+                    put(g.C_GATE_TYPE, r.gateType)
+                    put(g.C_AREA, r.area)
+                    put(g.C_TERMINAL, r.terminal)
+                    put(g.C_ZONE, r.zone)
+                    put(g.C_REMARK, r.remark)
                 }
                 database.insert(g.TABLE, null, cv)
             }

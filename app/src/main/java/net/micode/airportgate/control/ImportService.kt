@@ -1,4 +1,4 @@
-package net.micode.airportgate.biz
+package net.micode.airportgate.control
 
 import android.content.Context
 import net.micode.airportgate.data.db.GateRepository

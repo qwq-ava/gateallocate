@@ -1,4 +1,4 @@
-package net.micode.airportgate.biz.stats
+package net.micode.airportgate.control.stats
 
 import android.content.Context
 import android.database.Cursor
@@ -28,6 +28,7 @@ import java.util.Locale
 //
 // 说明：allocation-module 用 android.database.sqlite（零第三方依赖），这里直接复用
 //       GateDbHelper.get(context).readableDatabase 即可，无需再引 Room。
+//       靠桥率需要的 is_bridge 与计划占用时段也在 assignments() / usageRecords() 中一并映射。
 
 class SqliteStatsDataSource(private val context: Context) : StatsDataSource {
 
@@ -86,11 +87,25 @@ class SqliteStatsDataSource(private val context: Context) : StatsDataSource {
         db.query(a.TABLE, null, null, null, null, null, null).use { c ->
             while (c.moveToNext()) {
                 if (c.str(a.C_STATUS) == "已取消") continue // 取消的分配不计入靠桥率
+                val date = c.str(a.C_FLIGHT_DATE)
+                // 靠桥率按统计窗口过滤：用计划占用时段；时间缺失或异常时退化为「当天全天」。
+                // epoch(date, 24*60) 经 Calendar 归一化后即次日 00:00。
+                val dayStart = epoch(date, 0) ?: 0L
+                val dayEnd = epoch(date, 24 * 60) ?: dayStart
+                var start = epoch(date, c.str(a.C_PLAN_START).takeIf { it.isNotEmpty() }) ?: dayStart
+                var end = epoch(date, c.str(a.C_PLAN_END).takeIf { it.isNotEmpty() }) ?: dayEnd
+                if (end <= start) {
+                    start = dayStart
+                    end = dayEnd
+                }
                 out += Assignment(
                     id = c.long(a.C_ID),
                     flightNo = c.str(a.C_FLIGHT_NO),
                     gateNo = c.str(a.C_GATE_NO),
-                    assignedAt = parseTs(c.str(a.C_CREATED)) ?: 0L
+                    assignedAt = parseTs(c.str(a.C_CREATED)) ?: 0L,
+                    isBridge = c.int(a.C_IS_BRIDGE) == 1,
+                    occupyStart = start,
+                    occupyEnd = end
                 )
             }
         }
@@ -116,7 +131,8 @@ class SqliteStatsDataSource(private val context: Context) : StatsDataSource {
                     gateNo = c.str(u.C_GATE_NO),
                     flightNo = c.str(u.C_FLIGHT_NO),
                     occupyStart = start,
-                    occupyEnd = end
+                    occupyEnd = end,
+                    isBridge = c.int(u.C_IS_BRIDGE) == 1
                 )
             }
         }

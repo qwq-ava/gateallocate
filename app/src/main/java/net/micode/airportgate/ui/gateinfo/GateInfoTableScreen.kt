@@ -14,11 +14,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -65,13 +65,13 @@ import java.util.UUID
 // 布局照机位维护组员给出的设计稿：一张横向表格，每行一个机位，
 // 四列 —— 机位编号 / 停机位种类 / 可停靠机型 / 状态，行尾删除。
 //
-// 字段口径**按组长给分配引擎的约定**（不是早期的「近机位 / C类 / 开放」那套）：
-//   停机位种类  廊桥 / 远机位                -> 引擎据此「宽体优先廊桥」
-//   可停靠机型  系列名多选（A320,A330-300…） -> 引擎做包含匹配，不比翼展/长度
-//   状态        可用 / 维护 / 停用           -> 引擎只分配「可用」
+// 字段口径（2026-11-10 换成天津滨海机场真实停机位数据）：
+//   停机位种类  17 种真实功能用途（CSV function 列）-> 选择后自动同步内部廊桥标记
+//   可停靠机型  ICAO 等级 A–F 多选              -> 引擎按机型等级匹配（兼容历史系列名）
+//   状态        可用 / 维护 / 停用              -> 引擎只分配「可用」
 //
-// 另外两个组长点名要的字段（安全间隔、可用时段）在四列表里横着放不下，
-// 收进「点行展开」的展开区里改 —— 主表一眼能看 6~7 个机位，字段一个不少。
+// 安全间隔、可用时段、区域、航站楼、机坪分区、备注收进「点行展开」区里改，
+// 全部字段随底部「确定」整表落库；125 行用 LazyColumn 渲染。
 
 /** 输入 0615 -> 06:15 */
 private fun formatTimeInput(raw: String): String {
@@ -107,11 +107,12 @@ fun GateInfoTableScreen(
         id = UUID.randomUUID().toString(),
         code = "",
         bridge = GateInfoOptions.BRIDGE,
-        aircraftClass = "",
+        aircraftClass = "C",
         minInterval = GateInfoOptions.DEFAULT_INTERVAL,
-        openTime = "06:00",
-        closeTime = "23:00",
-        status = GateInfoOptions.STATUS_AVAILABLE
+        openTime = "00:00",
+        closeTime = "24:00",
+        status = GateInfoOptions.STATUS_AVAILABLE,
+        gateType = GateInfoOptions.DEFAULT_GATE_TYPE
     )
 
     fun updateRow(id: String, transform: (GateInfoRow) -> GateInfoRow) {
@@ -140,52 +141,55 @@ fun GateInfoTableScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(Modifier.width(22.dp))
-                HeaderCell("机位编号", Modifier.weight(1f))
-                HeaderCell("停机位种类", Modifier.weight(1f))
-                HeaderCell("可停靠机型", Modifier.weight(1f))
-                HeaderCell("状态", Modifier.weight(1f))
+                HeaderCell("机位编号", Modifier.weight(0.8f))
+                HeaderCell("停机位种类", Modifier.weight(1.6f))
+                HeaderCell("可停靠机型", Modifier.weight(0.9f))
+                HeaderCell("状态", Modifier.weight(0.8f))
                 Spacer(Modifier.width(30.dp))
             }
         }
 
-        // ---- 数据行 ----
-        Column(
+        // ---- 数据行：125 条真实机位用惰性列表，避免一次性组合上千个输入框 ----
+        LazyColumn(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 8.dp)
         ) {
             if (rows.isEmpty()) {
-                Box(
-                    Modifier.fillMaxWidth().padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "暂无机位\n点右上角「添加机位」开始录入",
-                        fontSize = 13.sp,
-                        color = TextSub,
-                        textAlign = TextAlign.Center,
-                        lineHeight = 20.sp
-                    )
+                item {
+                    Box(
+                        Modifier.fillMaxWidth().padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "暂无机位\n点右上角「添加机位」开始录入",
+                            fontSize = 13.sp,
+                            color = TextSub,
+                            textAlign = TextAlign.Center,
+                            lineHeight = 20.sp
+                        )
+                    }
                 }
             } else {
-                rows.forEach { row ->
-                    GateTableRow(
-                        row = row,
-                        expanded = expandedId == row.id,
-                        onToggleExpand = {
-                            expandedId = if (expandedId == row.id) null else row.id
-                        },
-                        onChange = { updated -> updateRow(row.id) { updated } },
-                        onDelete = {
-                            if (expandedId == row.id) expandedId = null
-                            rows = rows.filter { it.id != row.id }
-                        }
-                    )
-                    Spacer(Modifier.height(8.dp))
+                items(rows, key = { it.id }) { row ->
+                    Column {
+                        GateTableRow(
+                            row = row,
+                            expanded = expandedId == row.id,
+                            onToggleExpand = {
+                                expandedId = if (expandedId == row.id) null else row.id
+                            },
+                            onChange = { updated -> updateRow(row.id) { updated } },
+                            onDelete = {
+                                if (expandedId == row.id) expandedId = null
+                                rows = rows.filter { it.id != row.id }
+                            }
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
                 }
-                Spacer(Modifier.height(60.dp))
+                item { Spacer(Modifier.height(60.dp)) }
             }
         }
 
@@ -232,7 +236,7 @@ fun GateInfoTableScreen(
                 }
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "共 ${rows.size} 行 · 点行首箭头可改安全间隔与可用时段 · 编号为空的行不保存",
+                    "共 ${rows.size} 行 · 点行首箭头可改安全间隔、时段与真实档案字段 · 编号为空的行不保存",
                     fontSize = 11.sp,
                     color = TextSub,
                     modifier = Modifier.fillMaxWidth(),
@@ -289,33 +293,40 @@ private fun GateTableRow(
             // 机位编号
             CellInput(
                 value = row.code,
-                hint = "B27",
+                hint = "101",
                 onValueChange = { onChange(row.copy(code = it.take(10))) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(0.8f)
             )
             Spacer(Modifier.width(4.dp))
 
-            // 停机位种类
+            // 停机位种类：17 种真实功能用途；选完自动同步内部廊桥标记给引擎
             CellDropdown(
-                value = row.bridge,
-                options = GateInfoOptions.BRIDGE_TYPES,
+                value = row.gateType,
+                options = GateInfoOptions.GATE_TYPES,
                 valueColor = if (row.isBridge) Blue else Orange,
-                onSelect = { onChange(row.copy(bridge = it)) },
-                modifier = Modifier.weight(1f)
+                onSelect = {
+                    onChange(
+                        row.copy(
+                            gateType = it,
+                            bridge = GateInfoOptions.bridgeOf(it)
+                        )
+                    )
+                },
+                modifier = Modifier.weight(1.6f)
             )
             Spacer(Modifier.width(4.dp))
 
-            // 可停靠机型（系列名多选，单元格里只显示摘要）
+            // 可停靠机型：ICAO 等级 A–F（多选，单元格里只显示摘要）
             SeriesCell(
                 selected = row.aircraftClasses,
-                onToggle = { series ->
+                onToggle = { grade ->
                     val cur = row.aircraftClasses.toMutableList()
-                    if (series in cur) cur.remove(series) else cur.add(series)
+                    if (grade in cur) cur.remove(grade) else cur.add(grade)
                     // 按固定顺序回写，避免勾选顺序影响存储内容
-                    val ordered = GateInfoOptions.AIRCRAFT_SERIES.filter { it in cur }
+                    val ordered = GateInfoOptions.AIRCRAFT_CLASSES.filter { it in cur }
                     onChange(row.copy(aircraftClass = ordered.joinToString(",")))
                 },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(0.9f)
             )
             Spacer(Modifier.width(4.dp))
 
@@ -325,7 +336,7 @@ private fun GateTableRow(
                 options = GateInfoOptions.STATUS_TYPES,
                 valueColor = statusColor(row.status),
                 onSelect = { onChange(row.copy(status = it)) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(0.8f)
             )
 
             // 删除
@@ -388,11 +399,52 @@ private fun GateTableRow(
                         Text("可用时段止需晚于起", fontSize = 11.sp, color = Color(0xFFE24B4A))
                     }
 
+                    // 真实档案字段：区域 / 航站楼 / 机坪分区 / 备注，同样可改、随「确定」一起落库
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth()) {
+                        SmallInput(
+                            label = "区域",
+                            value = row.area,
+                            hint = "东区",
+                            onValueChange = { onChange(row.copy(area = it.take(20))) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        SmallInput(
+                            label = "航站楼",
+                            value = row.terminal,
+                            hint = "T1",
+                            onValueChange = { onChange(row.copy(terminal = it.take(20))) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        SmallInput(
+                            label = "机坪分区",
+                            value = row.zone,
+                            hint = "东一区",
+                            onValueChange = { onChange(row.copy(zone = it.take(20))) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    SmallInput(
+                        label = "备注",
+                        value = row.remark,
+                        hint = "运行保障备注",
+                        onValueChange = { onChange(row.copy(remark = it.take(120))) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
                     if (row.aircraftClasses.isNotEmpty()) {
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "可停靠机型：" + row.aircraftClasses.joinToString(", ") +
-                                " · 引擎按系列名包含匹配",
+                            "停机位种类：" + row.gateType + "（" + row.bridge + "）",
+                            fontSize = 10.sp,
+                            color = Color(0xFF9AA0A6)
+                        )
+                        Text(
+                            "可停靠机型：" + row.aircraftClasses.joinToString("、") { "$it 类" } +
+                                " · 分配引擎按 ICAO 等级匹配",
                             fontSize = 10.sp,
                             color = Color(0xFF9AA0A6)
                         )
@@ -508,8 +560,8 @@ private fun CellDropdown(
 }
 
 /**
- * 表格单元格：可停靠机型（多选）。
- * 格子窄，只显示摘要（第一个系列名 +N），完整清单在展开区里看。
+ * 表格单元格：可停靠机型 ICAO 等级 A–F（多选）。
+ * 格子窄，只显示摘要（第一个等级 +N），完整等级与代表机型在下拉 / 展开区里看。
  */
 @Composable
 private fun SeriesCell(
@@ -520,8 +572,8 @@ private fun SeriesCell(
     var expanded by remember { mutableStateOf(false) }
     val summary = when {
         selected.isEmpty() -> "选择"
-        selected.size == 1 -> selected.first()
-        else -> "${selected.first()}+${selected.size - 1}"
+        selected.size == 1 -> "${selected.first()} 类"
+        else -> "${selected.first()} 类+${selected.size - 1}"
     }
     Box(modifier) {
         Box(
@@ -552,13 +604,13 @@ private fun SeriesCell(
                 )
             }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                GateInfoOptions.AIRCRAFT_SERIES.forEach { opt ->
+                GateInfoOptions.AIRCRAFT_CLASSES.forEach { opt ->
                     val checked = opt in selected
                     DropdownMenuItem(
                         text = {
                             Text(
-                                opt,
-                                fontSize = 13.sp,
+                                "$opt 类 · ${GateInfoOptions.GRADE_HINT[opt] ?: ""}",
+                                fontSize = 12.sp,
                                 color = if (checked) Blue else TextMain,
                                 fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal
                             )

@@ -74,16 +74,25 @@ data class GanttDay(
 /** 同一「日期 + 机位」内时段重叠 → 标记冲突（甘特图标红）。
  *  多日数据必须先按日期分组，否则不同日期的同一机位会被误判为重叠。 */
 fun markConflicts(slots: List<GateSlot>): List<GateSlot> {
-    val out = slots.toMutableList()
-    slots.groupBy { it.date to it.gate }.forEach { (_, group) ->
-        val sorted = group.sortedBy { it.startMin }
-        for (i in 0 until sorted.size - 1) {
-            if (sorted[i].endMin > sorted[i + 1].startMin) {
-                out[out.indexOf(sorted[i])] = sorted[i].copy(conflict = true)
-                out[out.indexOf(sorted[i + 1])] = sorted[i + 1].copy(conflict = true)
+    // 先收集需要标红的「原始下标」，最后统一写回。
+    // 旧实现边遍历边用 out.indexOf(元素) 回写：某个色块一旦被 copy(conflict = true)，
+    // 原对象在列表里就匹配不上了，indexOf 返回 -1，密集数据（同一机位三段以上重叠）会
+    // 抛 IndexOutOfBoundsException 导致机位分配页闪退。改用下标后与元素相等性无关。
+    val conflictIdx = mutableSetOf<Int>()
+    slots.withIndex()
+        .groupBy { (_, slot) -> slot.date to slot.gate }
+        .forEach { (_, group) ->
+            val sorted = group.sortedBy { it.value.startMin }
+            for (i in 0 until sorted.size - 1) {
+                if (sorted[i].value.endMin > sorted[i + 1].value.startMin) {
+                    conflictIdx += sorted[i].index
+                    conflictIdx += sorted[i + 1].index
+                }
             }
         }
-    }
+    if (conflictIdx.isEmpty()) return slots
+    val out = slots.toMutableList()
+    conflictIdx.forEach { idx -> out[idx] = out[idx].copy(conflict = true) }
     return out
 }
 

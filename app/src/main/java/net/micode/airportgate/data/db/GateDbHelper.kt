@@ -22,7 +22,7 @@ import android.database.sqlite.SQLiteOpenHelper
 object GateDbContract {
 
     const val DB_NAME = "airport_gate.db"
-    const val DB_VERSION = 6   // v6：t_flight 新增 flight_type（国内/国际）标注列
+    const val DB_VERSION = 7   // v7：t_gate 增加真实机位档案字段（功能用途/区域/航站楼/分区/备注）
 
     /** 数据保留策略（天）；-1 表示永久保留 */
     object Retention {
@@ -74,6 +74,12 @@ object GateDbContract {
         const val C_OPEN_TIME = "open_time"       // 可用时段起 HH:mm
         const val C_CLOSE_TIME = "close_time"     // 可用时段止 HH:mm
         const val C_STATUS = "status"             // 可用 / 维护 / 停用
+        // v7 真实机位档案字段（来源：天津滨海机场 2014-08 逐编号停机位表）
+        const val C_GATE_TYPE = "gate_type"       // 停机位种类 = 功能用途（17 种）
+        const val C_AREA = "area"                 // 区域：东区 / 西区
+        const val C_TERMINAL = "terminal"         // 航站楼：T1 / T2 / —
+        const val C_ZONE = "zone"                 // 机坪分区：东一区… / 通用机坪…
+        const val C_REMARK = "remark"             // 备注
     }
 
     // ---------------- 2. 机位使用记录表 ----------------
@@ -177,7 +183,7 @@ class GateDbHelper private constructor(context: Context) :
             "CREATE INDEX IF NOT EXISTS idx_flight_date_status ON ${f.TABLE}(${f.C_FLIGHT_DATE},${f.C_STATUS})"
         )
 
-        // 机位信息表（v4 回归 SQLite）
+        // 机位信息表（v4 回归 SQLite，v7 补真实档案字段）
         val g = GateDbContract.Gate
         db.execSQL(
             """
@@ -190,7 +196,12 @@ class GateDbHelper private constructor(context: Context) :
                 ${g.C_MIN_INTERVAL} INTEGER DEFAULT 20,
                 ${g.C_OPEN_TIME} TEXT NOT NULL,
                 ${g.C_CLOSE_TIME} TEXT NOT NULL,
-                ${g.C_STATUS} TEXT NOT NULL
+                ${g.C_STATUS} TEXT NOT NULL,
+                ${g.C_GATE_TYPE} TEXT DEFAULT '',
+                ${g.C_AREA} TEXT DEFAULT '',
+                ${g.C_TERMINAL} TEXT DEFAULT '',
+                ${g.C_ZONE} TEXT DEFAULT '',
+                ${g.C_REMARK} TEXT DEFAULT ''
             )
             """.trimIndent()
         )
@@ -350,6 +361,19 @@ class GateDbHelper private constructor(context: Context) :
             // v6：t_flight 新增 flight_type（国内/国际）标注列，原有数据默认「国内」
             if (!columnExists(db, f.TABLE, f.C_FLIGHT_TYPE)) {
                 db.execSQL("ALTER TABLE ${f.TABLE} ADD COLUMN ${f.C_FLIGHT_TYPE} TEXT DEFAULT '国内'")
+            }
+        }
+
+        if (oldVersion < 7) {
+            // v7：t_gate 补真实机位档案字段。已有行这几列留空，
+            // 若仍是旧版 6 条示例机位，随后由 GateInfoStore.load 一次性换成 125 条权威数据。
+            val g = GateDbContract.Gate
+            listOf(
+                g.C_GATE_TYPE, g.C_AREA, g.C_TERMINAL, g.C_ZONE, g.C_REMARK
+            ).forEach { col ->
+                if (!columnExists(db, g.TABLE, col)) {
+                    db.execSQL("ALTER TABLE ${g.TABLE} ADD COLUMN $col TEXT DEFAULT ''")
+                }
             }
         }
     }

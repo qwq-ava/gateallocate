@@ -1,4 +1,4 @@
-package net.micode.airportgate.biz.engine;
+package net.micode.airportgate.control.engine;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -80,24 +80,57 @@ public final class GateAllocationEngine {
     }
 
     /**
-     * 机型兼容：把机位允许的机型与航班机型**都归一到系列名**再比较。
-     *
-     * 机位维护界面存的是完整型号（"A350-900"、"B737 MAX 8"、"A320neo"），
-     * 航班侧通常也是完整型号，因此两边都先 seriesOf() 归一后比较：
-     *   "A350-900"   与 "A350"      -> A350 / A350   匹配
-     *   "A320neo"    与 "A320"      -> A320 / A320   匹配
-     *   "B737 MAX 8" 与 "B737-800"  -> B737 / B737   匹配
-     * 完全相同的字符串直接判定通过（优先，避免归一误差）。
-     * 机位未配置机型（空列表）表示不限制。
+     * ICAO 机型等级 A–F：机位表按真实资料存等级（C/D/E/F），航班表存具体机型。
+     * 按系列名把航班机型映射到等级，供 compatible() 比较。
+     *   C -> A320 / B737 / C919 / ARJ21      D -> B757 / B767
+     *   E -> A330 / A340 / A350 / B787 / B777   F -> A380 / B747-8
+     * 支线机、公务机、通用航空器归 B；无法识别且不为空的归 B（A 类需人工配置）。
+     */
+    public static String gradeOf(String aircraft) {
+        String s = seriesOf(aircraft).toUpperCase();
+        if (s.isEmpty()) return "";
+        if (s.startsWith("A380") || s.startsWith("B747")) return "F";
+        if (s.startsWith("A330") || s.startsWith("A340") || s.startsWith("A350")
+                || s.startsWith("B787") || s.startsWith("B777")) return "E";
+        if (s.startsWith("B757") || s.startsWith("B767") || s.startsWith("A300")
+                || s.startsWith("A310")) return "D";
+        if (s.startsWith("A319") || s.startsWith("A320") || s.startsWith("A321")
+                || s.startsWith("B737") || s.startsWith("C919") || s.startsWith("ARJ")
+                || s.startsWith("ERJ") || s.startsWith("CRJ")) return "C";
+        return "B";
+    }
+
+    /** 机位配置项归一为等级字母：C / C类 / C 类 -> "C"；不是等级则返回空串 */
+    private static String gradeToken(String raw) {
+        if (raw == null) return "";
+        String t = raw.trim().replace("类", "").trim();
+        if (t.length() == 1 && t.charAt(0) >= 'A' && t.charAt(0) <= 'F') {
+            return t.toUpperCase();
+        }
+        return "";
+    }
+
+    /**
+     * 机型兼容，支持两种机位配置写法（2026-11-10 起以等级为主）：
+     *   ① 等级（真实停机位资料）：机位 "C" / "C类"，航班 "A320neo" -> gradeOf = C -> 匹配；
+     *   ② 历史系列名（旧数据）：两边都先 seriesOf() 归一后比较，
+     *      "A350-900" 与 "A350"、"A320neo" 与 "A320"、"B737 MAX 8" 与 "B737-800" 均可匹配。
+     * 完全相同的字符串直接判定通过；机位未配置机型（空列表）表示不限制。
      */
     public static boolean compatible(GateIn g, FlightIn f) {
         if (g.aircraftClasses == null || g.aircraftClasses.isEmpty()) return true;
         String flight = f.aircraft == null ? "" : f.aircraft.trim();
         String series = seriesOf(flight);
+        String grade = gradeOf(flight);
         for (String c : g.aircraftClasses) {
             if (c == null) continue;
             String t = c.trim();
             if (t.isEmpty()) continue;
+            String token = gradeToken(t);
+            if (!token.isEmpty()) {
+                if (token.equals(grade)) return true;               // ICAO 等级一致
+                continue;
+            }
             if (t.equalsIgnoreCase(flight)) return true;            // 完整型号完全相同
             if (seriesOf(t).equalsIgnoreCase(series)) return true;  // 归一到系列名后一致
         }

@@ -1,5 +1,6 @@
 package net.micode.airportgate.ui.stats
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -32,16 +33,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.ceil
+import net.micode.airportgate.control.stats.UtilizationTrend
 import net.micode.airportgate.data.model.RegionStat
 import net.micode.airportgate.data.model.StatsData
-import net.micode.airportgate.biz.UsageStatisticsController
-import net.micode.airportgate.biz.stats.UtilizationResult
+import net.micode.airportgate.control.UsageStatisticsController
+import net.micode.airportgate.control.stats.UtilizationResult
 import net.micode.airportgate.ui.components.AppCard
 import net.micode.airportgate.ui.components.SubTopBar
 import net.micode.airportgate.ui.theme.Blue
@@ -64,10 +72,14 @@ fun UsageAnalysisUI(onBack: () -> Unit) {
 
     // 计算结果（数据库异步读取，先空着，读到了再刷新界面）
     var result by remember { mutableStateOf<UtilizationResult?>(null) }
+    // 按天变化趋势（近 7 日 / 本月）；「今日实时」页签为空，不显示折线图
+    var trend by remember { mutableStateOf(UtilizationTrend(emptyList())) }
 
     LaunchedEffect(tabIndex) {
-        // 业务逻辑交由 domain.UsageStatisticsController 执行（算窗口 -> 调计算模块）
+        // 业务逻辑交由 biz.UsageStatisticsController 执行（算窗口 -> 调计算模块）
+        trend = UtilizationTrend(emptyList())   // 切页签先清掉旧曲线，避免短暂显示上一个区间
         result = UsageStatisticsController.computeStats(context, tabIndex)
+        trend = UsageStatisticsController.computeTrend(context, tabIndex)
     }
 
     val data = result?.toStatsData() ?: StatsData(
@@ -143,7 +155,12 @@ fun UsageAnalysisUI(onBack: () -> Unit) {
                     Text(data.bridgeDetail, fontSize = 11.sp, color = TextSub)
                 }
             }
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(if (trend.points.isNotEmpty()) 14.dp else 18.dp))
+            // ---- 平均机位利用率按天变化趋势（仅「近 7 日」与「本月」） ----
+            if (trend.points.isNotEmpty()) {
+                UtilizationTrendCard(trend, tabIndex)
+                Spacer(Modifier.height(18.dp))
+            }
             // ---- 机位区域利用率 ----
             AppCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -246,3 +263,181 @@ private fun UtilizationResult.toStatsData(): StatsData {
         warning = warning
     )
 }
+
+// ========================= 平均机位利用率按天折线图 =========================
+//
+// 数据来源：biz.UsageStatisticsController.computeTrend() —— 与顶部指标卡共用
+// 四张表和同一个 GateUtilizationCalculator.compute() 公式，只是把窗口切成「一天一个」。
+// 绘图沿用甘特图的做法：Compose Canvas 自绘，不引入第三方图表库。
+
+@Composable
+private fun UtilizationTrendCard(trend: UtilizationTrend, tabIndex: Int) {
+    val axisMax = niceAxisMax(trend.peak)
+    AppCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "平均机位利用率变化趋势",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextMain,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                if (tabIndex == 1) "近 7 日 · 按天" else "本月 · 按天",
+                fontSize = 12.sp,
+                color = TextSub
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "每天占用总时长 ÷（开放机位数 × 当天已过去时长），今天统计至当前时刻",
+            fontSize = 11.sp,
+            color = TextSub
+        )
+        Spacer(Modifier.height(12.dp))
+        TrendLineChart(trend, axisMax)
+        Spacer(Modifier.height(10.dp))
+        HorizontalDivider(color = Color(0xFFF0F1F3))
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            TrendStat("峰值", pct(trend.peak, axisMax), Blue)
+            TrendStat("峰值日", trend.peakLabel, TextMain)
+            TrendStat("日均", pct(trend.dailyAverage, axisMax), Green)
+            TrendStat("今日", pct(trend.today, axisMax), Orange)
+        }
+        if (trend.peak <= 0.0) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "所选区间暂无机位占用记录，各日利用率均为 0%；导入航班并执行「一键分配」后即可看到变化。",
+                fontSize = 11.sp,
+                color = TextSub,
+                lineHeight = 16.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun TrendStat(label: String, value: String, color: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, fontSize = 11.sp, color = TextSub)
+        Spacer(Modifier.height(2.dp))
+        Text(value, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = color)
+    }
+}
+
+@Composable
+private fun TrendLineChart(trend: UtilizationTrend, axisMax: Float) {
+    val points = trend.points
+    val n = points.size
+    val labelStep = if (n <= 8) 1 else ceil(n / 7.0).toInt()
+    val peakIndex = points.indexOfFirst { it.utilization == trend.peak }
+
+    val measurer = rememberTextMeasurer()
+    val gridColor = Color(0xFFEDEEF0)
+    val labelStyle = TextStyle(fontSize = 10.sp, color = TextSub)
+    val valueStyle = TextStyle(fontSize = 9.sp, color = TextMain, fontWeight = FontWeight.Bold)
+
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(190.dp)
+            .padding(horizontal = 4.dp)
+    ) {
+        val left = 40.dp.toPx()
+        val right = 14.dp.toPx()
+        val top = 20.dp.toPx()
+        val bottom = 26.dp.toPx()
+        val w = size.width - left - right
+        val h = size.height - top - bottom
+        if (w <= 0f || h <= 0f) return@Canvas
+
+        // Y 轴刻度 + 水平网格（0 ~ axisMax 四等分）
+        for (i in 0..4) {
+            val y = top + h * i / 4f
+            val value = axisMax * (4 - i) / 4f
+            drawLine(
+                color = gridColor,
+                start = Offset(left, y),
+                end = Offset(left + w, y),
+                strokeWidth = 1.dp.toPx()
+            )
+            val t = pct(value.toDouble(), axisMax)
+            val tw = measurer.measure(t, labelStyle).size.width
+            drawText(
+                textMeasurer = measurer,
+                text = t,
+                topLeft = Offset(left - tw - 6.dp.toPx(), y - 7.dp.toPx()),
+                style = labelStyle
+            )
+        }
+
+        val xs = if (n == 1) listOf(left + w / 2f)
+        else points.indices.map { left + w * it / (n - 1) }
+        val ys = points.map { p ->
+            top + h * (1f - (p.utilization.toFloat() / axisMax).coerceIn(0f, 1f))
+        }
+
+        // 折线
+        for (i in 0 until n - 1) {
+            drawLine(
+                color = Blue,
+                start = Offset(xs[i], ys[i]),
+                end = Offset(xs[i + 1], ys[i + 1]),
+                strokeWidth = 2.5.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+        }
+
+        points.forEachIndexed { i, p ->
+            val dotColor = if (p.isToday) Orange else Blue
+            drawCircle(Color.White, radius = 4.5.dp.toPx(), center = Offset(xs[i], ys[i]))
+            drawCircle(dotColor, radius = 3.dp.toPx(), center = Offset(xs[i], ys[i]))
+
+            // 数值标签：点数少时全标；本月天数多时只标峰值点与今日点，避免重叠
+            if (n <= 10 || p.isToday || i == peakIndex) {
+                val t = pct(p.utilization, axisMax)
+                val tw = measurer.measure(t, valueStyle).size.width
+                drawText(
+                    textMeasurer = measurer,
+                    text = t,
+                    topLeft = Offset(
+                        (xs[i] - tw / 2f).coerceIn(0f, (size.width - tw).coerceAtLeast(0f)),
+                        (ys[i] - 17.dp.toPx()).coerceAtLeast(0f)
+                    ),
+                    style = valueStyle
+                )
+            }
+            // X 轴日期标签：本月抽稀显示，末点（今天）必显示
+            if (i % labelStep == 0 || i == n - 1) {
+                val tw = measurer.measure(p.label, labelStyle).size.width
+                drawText(
+                    textMeasurer = measurer,
+                    text = p.label,
+                    topLeft = Offset(xs[i] - tw / 2f, size.height - bottom + 6.dp.toPx()),
+                    style = labelStyle
+                )
+            }
+        }
+    }
+}
+
+/** Y 轴上限档位：让峰值落在约 3/4 高度，刻度取 1/2/5 系列的整齐数字 */
+private val AXIS_STEPS = listOf(0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0)
+
+/**
+ * 真实场景下 125 个机位作分母，日利用率常只有 0.x%；
+ * 若固定 0~100% 或最低 20%，曲线会被压成一条贴底直线，看不出变化。
+ */
+private fun niceAxisMax(peak: Double): Float {
+    if (peak <= 0.0) return 20f          // 无数据时给一个默认量程
+    val target = peak / 0.75
+    return (AXIS_STEPS.firstOrNull { it >= target } ?: 100.0).toFloat()
+}
+
+/**
+ * 百分比文字：小量程保留两位小数，避免 0.x% 全被显示成 0%，
+ * 也避免 1% 量程下 0.75% / 0.25% 这类刻度被四舍五入成 0.8% / 0.3%。
+ */
+private fun pct(v: Double, axisMax: Float): String =
+    if (axisMax <= 5f) "%.2f%%".format(v) else "%.1f%%".format(v)
