@@ -103,8 +103,8 @@ private val AIRPORT_OPTIONS = listOf(
     "南宁吴圩", "兰州中川", "乌鲁木齐地窝堡", "呼和浩特白塔"
 )
 
-/** 时间输入实时规整：去掉非数字后按长度补格式（6->6、15->15、615->06:15、0615->06:15）。
- *  宽松写法的最终校验交给 model.normalizeTime，这里只做顺手排版，不阻断输入。 */
+/** 时间输入实时规整：只收数字、自动补冒号。敲 0615 → 06:15，敲 615 → 06:15（补前导 0）。
+ *  这样数字键盘上无需 colon 键也能录入 HH:mm，最终格式仍由 model.normalizeTime 在提交时校验。 */
 private fun formatTimeInput(raw: String): String {
     val d = raw.filter { it.isDigit() }.take(4)
     return when {
@@ -599,13 +599,14 @@ private fun LabeledField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
                 textStyle = TextStyle(fontSize = 14.sp, color = TextMain),
                 keyboardOptions = KeyboardOptions(
                     keyboardType = if (isTime) KeyboardType.Number else KeyboardType.Text,
                     imeAction = ImeAction.Next
                 ),
                 decorationBox = { inner ->
-                    Box(contentAlignment = Alignment.CenterStart) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
                         if (value.isEmpty()) Text(hint, fontSize = 12.sp, color = Color(0xFFBBBBBB))
                         inner()
                     }
