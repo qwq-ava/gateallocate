@@ -32,7 +32,8 @@ data class FlightDraft(
     val dest: String = "",          // 目的机场
     val gateNo: String = "",        // 分配到的机位编号（分配后由 markFlightAssigned 回写）
     val status: String = "",        // 分配状态：待分配 / 已分配 / 已取消 / 已完成
-    val locked: Boolean = false     // UI/校验专用：已飞完的航班不可修改（不落库，仅控制可编辑性）
+    val locked: Boolean = false,    // UI/校验专用：已飞完的航班不可修改（不落库，仅控制可编辑性）
+    val belongDate: String = dateOf(1) // 主落库日（跨天航班=前段所在日）；UI 分组与落库用，不落库
 ) {
     /** 展示 / 兜底用的计划起降时刻：进港看到达，出港看离开 */
     val planTime: String

@@ -73,9 +73,9 @@ import net.micode.airportgate.ui.theme.TextSub
 // 「计划起降」不再手填，由进出港派生（进港取到达、出港取离开），只用于展示兜底。
 //
 // 页签口径：
-//   - 新建导入（CREATE）：仅「明天航班信息」一页（按需求只保留明日导入）；
-//   - 信息更改（EDIT）：今天 / 明天两页，方便修改已导入航班；
-//     其中「今天」已飞完（离开时刻早于当前时刻）的航班会被锁定为只读，不可修改。
+//   - 新建导入（CREATE）：仅「明天航班信息」一页（按需求只保留明日导入，不涉及今日）；
+//   - 信息更改（EDIT）：今日 / 明日合并为一张「航班信息」表，按时间排序，方便修改已导入航班；
+//     跨天航班在库里分两段存放，此处合并成一条展示；已飞完的航班（locked）只读。
 
 /** 录入模式：新建导入 / 修改已有 */
 enum class FlightFormMode { CREATE, EDIT }
@@ -103,8 +103,8 @@ private val AIRPORT_OPTIONS = listOf(
     "南宁吴圩", "兰州中川", "乌鲁木齐地窝堡", "呼和浩特白塔"
 )
 
-/** 时间输入实时规整：去掉非数字后按长度补格式（6->6、15->15、615->06:15、0615->06:15）。
- *  宽松写法的最终校验交给 model.normalizeTime，这里只做顺手排版，不阻断输入。 */
+/** 时间输入实时规整：只收数字、自动补冒号。敲 0615 → 06:15，敲 615 → 06:15（补前导 0）。
+ *  这样数字键盘上无需 colon 键也能录入 HH:mm，最终格式仍由 model.normalizeTime 在提交时校验。 */
 private fun formatTimeInput(raw: String): String {
     val d = raw.filter { it.isDigit() }.take(4)
     return when {
@@ -132,7 +132,7 @@ fun FlightFormScreen(
     Column(Modifier.fillMaxSize().background(Color(0xFFF4F5F7))) {
         SubTopBar(if (mode == FlightFormMode.CREATE) "数据导入" else "航班信息更改", onBack)
 
-        // ---- 日期页签：EDIT 为今天/明天两页；CREATE 仅明天一页 ----
+        // ---- 日期页签：当前为单 tab（合表/单页均为单页），无需切换；逻辑保留以扩展 ----
         if (tabs.size > 1) {
             Surface(color = Color.White, shadowElevation = 1.dp) {
                 Row(
@@ -183,7 +183,10 @@ fun FlightFormScreen(
                             color = Blue
                         )
                         Spacer(Modifier.height(2.dp))
-                        Text(date, fontSize = 11.sp, color = TextSub)
+                        Text(
+                            if (mode == FlightFormMode.EDIT) "今日 / 明日合并展示" else date,
+                            fontSize = 11.sp, color = TextSub
+                        )
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
@@ -279,8 +282,8 @@ fun FlightFormScreen(
                 }
                 Spacer(Modifier.width(8.dp))
                 Button(
-                    onClick = { onSubmit(tabs.associate { it.date to it.rows.toList() }) },
-                    enabled = tabs.any { it.rows.isNotEmpty() },
+                    onClick = { onSubmit(active.rows.groupBy { it.belongDate }.mapValues { it.value.toList() }) },
+                    enabled = active.rows.isNotEmpty(),
                     modifier = Modifier
                         .weight(1.2f)
                         .height(44.dp),
@@ -328,6 +331,8 @@ private fun FlightCard(
                     }
                     Spacer(Modifier.width(8.dp))
                     Text("航班 $index", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextMain)
+                    Spacer(Modifier.width(8.dp))
+                    DayTag(row.belongDate)
                     Spacer(Modifier.weight(1f))
                     Surface(color = Color(0xFFEDEFF2), shape = RoundedCornerShape(6.dp)) {
                         Text("已飞完", fontSize = 11.sp, color = TextSub, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
@@ -391,6 +396,8 @@ private fun FlightCard(
                     }
                     Spacer(Modifier.width(8.dp))
                     Text("航班 $index", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextMain)
+                    Spacer(Modifier.width(8.dp))
+                    DayTag(row.belongDate)
                     Spacer(Modifier.weight(1f))
                     IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
                         Icon(
@@ -517,6 +524,28 @@ private fun FlightCard(
     }
 }
 
+/** 卡片顶部的小标签：标识该航班属于「今日」还是「明日」（合表后区分来源） */
+@Composable
+private fun DayTag(belongDate: String) {
+    val isToday = belongDate == dateOf(0)
+    val text = when (belongDate) {
+        dateOf(0) -> "今日"
+        dateOf(1) -> "明日"
+        else -> belongDate
+    }
+    Surface(
+        color = if (isToday) Color(0xFFE6F4EA) else Color(0xFFE8F0FE),
+        shape = RoundedCornerShape(6.dp)
+    ) {
+        Text(
+            text,
+            fontSize = 11.sp,
+            color = if (isToday) Color(0xFF1E8E3E) else Blue,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+        )
+    }
+}
+
 /** 只读单元格（已飞完航班展示用） */
 @Composable
 private fun ReadOnlyCell(label: String, value: String, modifier: Modifier = Modifier) {
@@ -570,13 +599,14 @@ private fun LabeledField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
                 textStyle = TextStyle(fontSize = 14.sp, color = TextMain),
                 keyboardOptions = KeyboardOptions(
                     keyboardType = if (isTime) KeyboardType.Number else KeyboardType.Text,
                     imeAction = ImeAction.Next
                 ),
                 decorationBox = { inner ->
-                    Box(contentAlignment = Alignment.CenterStart) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
                         if (value.isEmpty()) Text(hint, fontSize = 12.sp, color = Color(0xFFBBBBBB))
                         inner()
                     }
