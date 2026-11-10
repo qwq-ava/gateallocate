@@ -73,9 +73,9 @@ import net.micode.airportgate.ui.theme.TextSub
 // 「计划起降」不再手填，由进出港派生（进港取到达、出港取离开），只用于展示兜底。
 //
 // 页签口径：
-//   - 新建导入（CREATE）：仅「明天航班信息」一页（按需求只保留明日导入）；
-//   - 信息更改（EDIT）：今天 / 明天两页，方便修改已导入航班；
-//     其中「今天」已飞完（离开时刻早于当前时刻）的航班会被锁定为只读，不可修改。
+//   - 新建导入（CREATE）：仅「明天航班信息」一页（按需求只保留明日导入，不涉及今日）；
+//   - 信息更改（EDIT）：今日 / 明日合并为一张「航班信息」表，按时间排序，方便修改已导入航班；
+//     跨天航班在库里分两段存放，此处合并成一条展示；已飞完的航班（locked）只读。
 
 /** 录入模式：新建导入 / 修改已有 */
 enum class FlightFormMode { CREATE, EDIT }
@@ -132,7 +132,7 @@ fun FlightFormScreen(
     Column(Modifier.fillMaxSize().background(Color(0xFFF4F5F7))) {
         SubTopBar(if (mode == FlightFormMode.CREATE) "数据导入" else "航班信息更改", onBack)
 
-        // ---- 日期页签：EDIT 为今天/明天两页；CREATE 仅明天一页 ----
+        // ---- 日期页签：当前为单 tab（合表/单页均为单页），无需切换；逻辑保留以扩展 ----
         if (tabs.size > 1) {
             Surface(color = Color.White, shadowElevation = 1.dp) {
                 Row(
@@ -177,14 +177,14 @@ fun FlightFormScreen(
                 ) {
                     Column {
                         Text(
-                            if (tabs.size > 1) active.label else "航班信息（按时间排序）",
+                            active.label,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = Blue
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            if (tabs.size > 1) date else "今日 / 明日合并展示",
+                            if (mode == FlightFormMode.EDIT) "今日 / 明日合并展示" else date,
                             fontSize = 11.sp, color = TextSub
                         )
                     }

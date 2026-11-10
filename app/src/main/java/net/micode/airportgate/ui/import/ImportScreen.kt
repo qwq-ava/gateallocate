@@ -79,8 +79,9 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
     var mergedFrontDates by remember { mutableStateOf(mapOf<String, String>()) }
 
     // 表格数据放在这一层，关闭表格再进来时填写内容不会丢
-    // 信息更改 / 新建导入统一用一张「今日+明日合并、按时间排序」的表
+    // 信息更改：今日+明日合并、按时间排序的一张表；新建导入：仅「明天航班信息」一页
     val rowsMerged = remember { mutableStateListOf<FlightDraft>() }
+    val rowsTomorrow = remember { mutableStateListOf<FlightDraft>() }
 
     val requiredFields = listOf(
         "航班号", "航班日期", "进出港", "机型", "到达时刻", "离开时刻", "起降机场"
@@ -154,11 +155,12 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
                 showMsg("近三天暂无已导入航班，可直接补录")
             }
         } else {
+            // 新建导入：仅「明天航班信息」一页，数据导入只录明日，不涉及今日
             mergedOvernightNos = emptySet()
             mergedFrontDates = emptyMap()
-            if (rowsMerged.isEmpty()) {
+            if (rowsTomorrow.isEmpty()) {
                 // 卡片式一屏一条，先给 1 条，其余用「复制新增」快速加；belongDate 默认为明天
-                rowsMerged.add(FlightDraft(id = System.nanoTime()))
+                rowsTomorrow.add(FlightDraft(id = System.nanoTime()))
             }
         }
         formMode = mode
@@ -229,9 +231,12 @@ fun ImportScreen(onBack: () -> Unit, showMsg: (String) -> Unit) {
 
     if (formMode != null) {
         val mode = formMode!!
-        // 信息更改 / 新建导入统一为一张「航班信息」表（今日+明日合并、按时间排序），
-        // 每条航班通过 belongDate 记住各自的主落库日，落库时按日分组
-        val tabs = listOf(FlightFormTab(dateOf(0), "航班信息", rowsMerged))
+        // 新建导入：仅「明天航班信息」一页；信息更改：今日+明日合并、按时间排序的一张表
+        val tabs = if (mode == FlightFormMode.EDIT) {
+            listOf(FlightFormTab(dateOf(0), "航班信息", rowsMerged))
+        } else {
+            listOf(FlightFormTab(dateOf(1), "明天航班信息", rowsTomorrow))
+        }
         FlightFormScreen(
             mode = mode,
             tabs = tabs,
