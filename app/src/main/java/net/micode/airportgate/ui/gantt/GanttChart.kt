@@ -11,7 +11,6 @@ import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,18 +21,21 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,13 +47,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import net.micode.airportgate.data.model.GateSlot
+import net.micode.airportgate.data.model.MINUTES_PER_DAY
+import net.micode.airportgate.data.model.dateOf
+import net.micode.airportgate.data.model.fmtTime
+import net.micode.airportgate.data.model.nextDate
 import net.micode.airportgate.data.model.nowMinuteOfDay
 import net.micode.airportgate.ui.components.AppCard
 import net.micode.airportgate.ui.theme.Blue
@@ -62,83 +70,166 @@ import net.micode.airportgate.ui.theme.Orange
 import net.micode.airportgate.ui.theme.TextMain
 import net.micode.airportgate.ui.theme.TextSub
 
-// ========================= 甘特图（机位 × 时间） =========================
+// ========================= 甘特图（一张连续时间轴：日期 × 机位） =========================
 
-private val GATE_COL_W = 62.dp
-private val GANTT_HEADER_H = 26.dp
+private val GATE_COL_W = 66.dp
+private val DATE_HEADER_H = 22.dp      // 第一行表头：日期带
+private val TIME_HEADER_H = 22.dp      // 第二行表头：00:00 - 24:00 时间刻度
+private val HEADER_H = DATE_HEADER_H + TIME_HEADER_H
 private val GANTT_ROW_H = 38.dp
-private const val AXIS_START_MIN = 0          // 时间轴起点 00:00
-private const val AXIS_END_MIN = 24 * 60      // 时间轴终点 24:00（全天 24 小时）
 
 /**
- * 甘特图主体。
- * fitWidth = false：竖屏内嵌，固定刻度，可横向滑动 + 双指缩放
- * fitWidth = true ：全屏横屏，刻度自动铺满宽度，整轴一屏呈现
+ * 甘特图的缩放 / 平移状态。
+ * 卡片与全屏各自持有一份，使「+ / − 按钮」与「双指缩放 / 单指滑动」操作同一组 scale/offset。
+ */
+class GanttZoomState(initialScale: Float = 1f) {
+    var scale by mutableFloatStateOf(initialScale)
+    var offset by mutableFloatStateOf(0f)
+
+    /** 日期快捷跳转请求：非 null 时由图表把横轴滚到第 index 天的 00:00，处理完自动清空 */
+    var scrollToDay by mutableStateOf<Int?>(null)
+
+    fun zoomIn() { scale = (scale * 1.3f).coerceIn(MIN_SCALE, MAX_SCALE) }
+    fun zoomOut() { scale = (scale / 1.3f).coerceIn(MIN_SCALE, MAX_SCALE) }
+    fun reset() { scale = 1f; offset = 0f }
+    fun goToDay(index: Int) { scrollToDay = index }
+
+    companion object {
+        const val MIN_SCALE = 0.6f
+        const val MAX_SCALE = 4f
+    }
+}
+
+@Composable
+fun rememberGanttZoomState(): GanttZoomState = remember { GanttZoomState() }
+
+/** 日期带标签：今天 / 明天额外标注，便于在长轴上定位 */
+private fun dateLabel(date: String, today: String): String = when (date) {
+    today -> "$date  今天"
+    nextDate(today) -> "$date  明天"
+    else -> date
+}
+
+/**
+ * 一张连续甘特图：时间轴按 [dates] 顺序把每个日历日的 24 小时首尾相接，
+ * 今天的 00:00–24:00 排完紧接下一天的 00:00–24:00，日期带与跨日分界线标明换天位置。
  *
- * 绘制：单个视口尺寸的 Canvas，表头/网格/色块全部按 -ox 平移自绘，
- * 与点击命中测试共用同一坐标系（避免超大子元素带来的布局对齐问题）。
+ * - 横向单指滑动查看前后日期（纵向滑动放行给外层页面）；
+ * - 双指缩放，或卡片上的 + / − 按钮缩放；刻度文字、日期、航班号、左侧机位名随缩放同步放大；
+ * - fitWidth = true（全屏横屏）时让「一天 24 小时」刚好铺满一屏，其余日期左右滑动查看。
+ *
+ * 绘制采用单个视口 Canvas，表头 / 网格 / 色块全部按 -ox 平移自绘，与点击命中测试共用同一坐标系。
  */
 @Composable
 fun GateGanttChart(
     gates: List<String>,
     slots: List<GateSlot>,
+    dates: List<String>,
     fitWidth: Boolean,
     onSlotClick: (GateSlot) -> Unit,
     modifier: Modifier = Modifier,
+    zoomState: GanttZoomState = rememberGanttZoomState(),
     rowHeight: Dp = GANTT_ROW_H,
-    axisStartMin: Int = AXIS_START_MIN,
-    axisEndMin: Int = AXIS_END_MIN,
-    basePxPerMin: Float = 1.6f
+    basePxPerMin: Float = 1.6f,
+    showNowLine: Boolean = true,
+    today: String = dateOf(0)
 ) {
-    var scale by remember(fitWidth) { mutableFloatStateOf(1f) }
-    var offset by remember(fitWidth) { mutableFloatStateOf(0f) }
     val density = LocalDensity.current
-    val axisLen = (axisEndMin - axisStartMin).toFloat()
+    val dayCount = dates.size.coerceAtLeast(1)
+    val axisLen = (dayCount * MINUTES_PER_DAY).toFloat()
+    val scale = zoomState.scale
+    // 字号随缩放同步放大，设上限避免字大到溢出固定行高
+    val textScale = scale.coerceIn(0.8f, 2.2f)
+    // 左侧机位列宽度固定，长机位号（如 T2-14）不能跟着放大到 2.2 倍，否则会被挤断行；
+    // 「上面的字」（日期带、时间刻度、色块航班号）仍按 textScale 完整放大。
+    val gateTextScale = textScale.coerceAtMost(1.3f)
+    val dayIndexOf = remember(dates) { dates.mapIndexed { i, d -> d to i }.toMap() }
 
-    Row(Modifier.fillMaxWidth()) {
-        // ---- 左侧固定机位列 ----
+    Row(modifier.fillMaxWidth()) {
+        // ---- 左侧固定机位列（表头两行留空，机位名随缩放放大） ----
         Column(Modifier.width(GATE_COL_W).background(Color(0xFFFAFAFC))) {
-            Box(Modifier.height(GANTT_HEADER_H), contentAlignment = Alignment.CenterStart) {
-                Text("机位", fontSize = 11.sp, color = TextSub)
+            Box(Modifier.height(HEADER_H), contentAlignment = Alignment.BottomStart) {
+                Text(
+                    "机位",
+                    fontSize = (11 * gateTextScale).sp,
+                    color = TextSub,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
             }
             gates.forEach { gate ->
                 Box(Modifier.height(rowHeight), contentAlignment = Alignment.CenterStart) {
-                    Text(gate, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Blue)
+                    Text(
+                        gate,
+                        fontSize = (12 * gateTextScale).sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Blue,
+                        maxLines = 1
+                    )
                 }
             }
         }
-        // ---- 右侧时间轴绘图区 ----
+
+        // ---- 右侧：连续日期时间轴 ----
         BoxWithConstraints(Modifier.weight(1f)) {
-            val labelPaint = remember {
+            val baseLabelPx = with(density) { 11.sp.toPx() }
+            val baseDatePx = with(density) { 12.sp.toPx() }
+            val baseBarTextPx = with(density) { 11.sp.toPx() }
+            // 字号是 key：缩放时重建 Paint，保证表头 / 色块文字一起变大
+            val labelPaint = remember(textScale, baseLabelPx) {
                 Paint().apply {
-                    color = android.graphics.Color.parseColor("#999999")
-                    textSize = with(density) { 11.sp.toPx() }
+                    color = android.graphics.Color.parseColor("#8A9099")
+                    textSize = baseLabelPx * textScale
                     isAntiAlias = true
                 }
             }
-            // 时间轴右端预留余量：末端刻度 24:00 的标签要有地方站，
-            // 否则贴边被迫左移一个标签宽度，和 22:00 挤在一起
-            val endPadPx = remember(labelPaint) {
-                labelPaint.measureText("24:00") + with(density) { 8.dp.toPx() }
+            val datePaint = remember(textScale, baseDatePx) {
+                Paint().apply {
+                    color = android.graphics.Color.parseColor("#2F5FA8")
+                    textSize = baseDatePx * textScale
+                    typeface = Typeface.DEFAULT_BOLD
+                    isAntiAlias = true
+                }
             }
+            val barTextPaint = remember(textScale, baseBarTextPx) {
+                Paint().apply {
+                    color = android.graphics.Color.WHITE
+                    textSize = baseBarTextPx * textScale
+                    typeface = Typeface.DEFAULT_BOLD
+                    isAntiAlias = true
+                }
+            }
+
+            // 时间轴末端留一点余量，让最后一个刻度标签不至于贴边被裁
+            val endPadPx = with(density) { 36.dp.toPx() }
             val endPadDp = with(density) { endPadPx.toDp().value }
-            // 全屏时 fitScale 让整轴刚好铺满可视宽度（已扣除末端标签预留）
+            val viewportW = with(density) { maxWidth.toPx() }
+            // 全屏：一整天（1440 分钟）铺满一屏；内嵌：固定刻度密度
             val fitScale = if (fitWidth) {
-                ((maxWidth.value - endPadDp) / (axisLen * basePxPerMin)).coerceAtLeast(0.1f)
+                ((maxWidth.value - endPadDp) / (MINUTES_PER_DAY * basePxPerMin)).coerceAtLeast(0.1f)
             } else 1f
             val pxPerMinDp = basePxPerMin * scale * fitScale
             val pxPerMin = with(density) { pxPerMinDp.dp.toPx() }
-            val viewportW = with(density) { maxWidth.toPx() }
             val contentW = axisLen * pxPerMin + endPadPx
             val maxOffset = (contentW - viewportW).coerceAtLeast(0f)
-            val ox = offset.coerceIn(0f, maxOffset)
+            val ox = zoomState.offset.coerceIn(0f, maxOffset)
 
-            val headerPx = with(density) { GANTT_HEADER_H.toPx() }
+            // 日期快捷跳转：把横轴定位到目标日的 00:00（内嵌视图一天有好几屏宽，
+            // 点日期标签比手动滑过去更快；滑动仍然随时可用）
+            LaunchedEffect(zoomState.scrollToDay, pxPerMin, maxOffset) {
+                val target = zoomState.scrollToDay ?: return@LaunchedEffect
+                zoomState.offset = (target * MINUTES_PER_DAY * pxPerMin).coerceIn(0f, maxOffset)
+                zoomState.scrollToDay = null
+            }
+
+            val dateHeaderPx = with(density) { DATE_HEADER_H.toPx() }
+            val timeHeaderPx = with(density) { TIME_HEADER_H.toPx() }
+            val headerPx = dateHeaderPx + timeHeaderPx
             val rowPx = with(density) { rowHeight.toPx() }
-            val barPx = with(density) { 22.dp.toPx() }
+            val barPx = (with(density) { 22.dp.toPx() } * textScale)
+                .coerceAtMost(rowPx - with(density) { 6.dp.toPx() })
             val totalPx = headerPx + rowPx * gates.size
 
-            // 全天 24 小时轴：刻度密度随缩放自适应，避免 24 个整点标签挤在一起
+            // 刻度密度随缩放自适应（步长都能整除 1440，跨日边界不会错位）
             val hourDp = 60f * pxPerMinDp
             val gridStepMin = when {
                 hourDp >= 40f -> 30
@@ -152,15 +243,8 @@ fun GateGanttChart(
                 else -> 240
             }
             val nowMin = remember { nowMinuteOfDay() }
+            val todayIndex = dayIndexOf[today] ?: -1
 
-            val barTextPaint = remember {
-                Paint().apply {
-                    color = android.graphics.Color.WHITE
-                    textSize = with(density) { 11.sp.toPx() }
-                    typeface = Typeface.DEFAULT_BOLD
-                    isAntiAlias = true
-                }
-            }
             val oxState = rememberUpdatedState(ox)
             val pxState = rememberUpdatedState(pxPerMin)
 
@@ -171,7 +255,7 @@ fun GateGanttChart(
                     .clipToBounds()
                     .pointerInput(Unit) {
                         // 横向拖动 / 双指缩放由甘特图消费；
-                        // 纵向拖动不消费，放行给外层页面滚动（24 小时图较长，必须能正常滚过）
+                        // 纵向拖动不消费，放行给外层页面滚动
                         awaitEachGesture {
                             awaitFirstDown(requireUnconsumed = false)
                             do {
@@ -179,48 +263,96 @@ fun GateGanttChart(
                                 val zoom = event.calculateZoom()
                                 val pan = event.calculatePan()
                                 val pinch = event.changes.size > 1
-                                if (pinch || abs(pan.x) > abs(pan.y)) {
-                                    val newScale = (scale * zoom).coerceIn(0.6f, 4f)
-                                    val newPx = with(density) { (basePxPerMin * newScale * fitScale).dp.toPx() }
-                                    val newMax = (axisLen * newPx - viewportW).coerceAtLeast(0f)
-                                    scale = newScale
-                                    offset = (offset - pan.x).coerceIn(0f, newMax)
+                                if (pinch && zoom != 1f) {
+                                    // 以触点为锚点缩放：锚点下的时刻保持不动
+                                    val newScale = (zoomState.scale * zoom)
+                                        .coerceIn(GanttZoomState.MIN_SCALE, GanttZoomState.MAX_SCALE)
+                                    val ratio = newScale / zoomState.scale
+                                    val anchorX = event.changes.first().position.x
+                                    val wanted = (anchorX + zoomState.offset) * ratio - anchorX - pan.x
+                                    val newPx = with(density) {
+                                        (basePxPerMin * newScale * fitScale).dp.toPx()
+                                    }
+                                    val newMax = (axisLen * newPx + endPadPx - viewportW).coerceAtLeast(0f)
+                                    zoomState.scale = newScale
+                                    zoomState.offset = wanted.coerceIn(0f, newMax)
+                                    event.changes.forEach { it.consume() }
+                                } else if (!pinch && abs(pan.x) > abs(pan.y) && pan.x != 0f) {
+                                    val curPx = with(density) {
+                                        (basePxPerMin * zoomState.scale * fitScale).dp.toPx()
+                                    }
+                                    val curMax = (axisLen * curPx + endPadPx - viewportW).coerceAtLeast(0f)
+                                    zoomState.offset = (zoomState.offset - pan.x).coerceIn(0f, curMax)
                                     event.changes.forEach { it.consume() }
                                 }
                             } while (event.changes.any { it.pressed })
                         }
                     }
             ) {
-                // ---- 视口 Canvas：表头 / 网格 / 虚线 / 色块全部按 -ox 平移绘制 ----
                 Canvas(Modifier.fillMaxSize()) {
                     val w = size.width
-                    // 竖向网格 + 整点刻度（00:00 - 24:00，密度随缩放自适应）
-                    var m = axisStartMin
-                    while (m <= axisEndMin) {
-                        val x = (m - axisStartMin) * pxPerMin - ox
+
+                    // ---- 1) 日期带：每 24h 一块，交替底色；日期标签吸顶显示 ----
+                    // 用 dates.indices 而非 dayCount，保证数据尚未加载完时不会越界
+                    for (i in dates.indices) {
+                        val left = i * MINUTES_PER_DAY * pxPerMin - ox
+                        val right = (i + 1) * MINUTES_PER_DAY * pxPerMin - ox
+                        if (right < 0f || left > w) continue
+                        drawRect(
+                            color = if (i % 2 == 0) Color(0xFFF1F6FF) else Color(0xFFFAFBFE),
+                            topLeft = Offset(left, 0f),
+                            size = Size(right - left, dateHeaderPx)
+                        )
+                        val label = dateLabel(dates[i], today)
+                        val tw = datePaint.measureText(label)
+                        // 日期滚过视口左缘时把标签固定在左边，滑动中始终看得到「当前是哪天」
+                        val maxTx = (w - tw - 4.dp.toPx()).coerceAtLeast(4.dp.toPx())
+                        val tx = (left + 8.dp.toPx()).coerceIn(4.dp.toPx(), maxTx)
+                        drawIntoCanvas { c ->
+                            c.nativeCanvas.drawText(
+                                label, tx,
+                                dateHeaderPx / 2f + datePaint.textSize / 3f, datePaint
+                            )
+                        }
+                    }
+                    drawLine(
+                        Color(0xFFDEE4EE), Offset(0f, dateHeaderPx), Offset(w, dateHeaderPx), 1f
+                    )
+
+                    // ---- 2) 竖网格 + 时间刻度（跨日边界画蓝色粗线） ----
+                    var m = 0
+                    while (m <= axisLen.toInt()) {
+                        val x = m * pxPerMin - ox
+                        val dayBoundary = m % MINUTES_PER_DAY == 0
                         if (x >= -1f && x <= w + 1f) {
                             val isMajor = m % labelStepMin == 0
+                            val lineColor = when {
+                                dayBoundary -> Color(0xFF9DB8E8)
+                                isMajor -> Color(0xFFE5E7EB)
+                                else -> Color(0xFFF6F7F8)
+                            }
                             drawLine(
-                                color = if (isMajor) Color(0xFFE5E7EB) else Color(0xFFF6F7F8),
-                                start = Offset(x, if (isMajor) 0f else headerPx),
+                                color = lineColor,
+                                start = Offset(x, if (dayBoundary) 0f else if (isMajor) dateHeaderPx else headerPx),
                                 end = Offset(x, totalPx),
-                                strokeWidth = 1f
+                                strokeWidth = if (dayBoundary) 2f else 1f
                             )
                             if (isMajor) {
-                                val label = "%02d:00".format(m / 60)
+                                // 1440 分即次日 00:00，按「00:00」标注而非「24:00」
+                                val label = "%02d:00".format((m % MINUTES_PER_DAY) / 60)
                                 val tw = labelPaint.measureText(label)
-                                // 末端刻度（24:00）若贴边则右对齐，避免被裁掉
                                 val tx = if (x + 4.dp.toPx() + tw <= w) x + 4.dp.toPx()
                                 else x - 4.dp.toPx() - tw
                                 drawIntoCanvas { c ->
-                                    c.nativeCanvas.drawText(label, tx, headerPx - 7.dp.toPx(), labelPaint)
+                                    c.nativeCanvas.drawText(label, tx, headerPx - 6.dp.toPx(), labelPaint)
                                 }
                             }
                         }
                         m += gridStepMin
                     }
-                    // 横向行线（画到时间轴末端为止，末端标签预留的余量保持空白）
-                    val axisEndX = (axisEndMin - axisStartMin) * pxPerMin - ox
+
+                    // ---- 3) 横向行线 ----
+                    val axisEndX = axisLen * pxPerMin - ox
                     val lineRight = w.coerceAtMost(axisEndX)
                     if (lineRight > 0f) {
                         for (i in 0..gates.size) {
@@ -228,23 +360,30 @@ fun GateGanttChart(
                             drawLine(Color(0xFFEDEEF0), Offset(0f, y), Offset(lineRight, y), 1f)
                         }
                     }
-                    // 当前时刻虚线（按系统时间实时定位）
-                    val nowX = (nowMin - axisStartMin) * pxPerMin - ox
-                    if (nowX >= 0f && nowX <= w) {
-                        drawLine(
-                            color = ConflictRed,
-                            start = Offset(nowX, headerPx),
-                            end = Offset(nowX, totalPx),
-                            strokeWidth = 2f,
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f))
-                        )
+
+                    // ---- 4) 当前时刻虚线（按真实日期定位到「今天」那个 24h 区块） ----
+                    if (showNowLine && todayIndex >= 0) {
+                        val nowX = (todayIndex * MINUTES_PER_DAY + nowMin) * pxPerMin - ox
+                        if (nowX >= 0f && nowX <= w) {
+                            drawLine(
+                                color = ConflictRed,
+                                start = Offset(nowX, dateHeaderPx),
+                                end = Offset(nowX, totalPx),
+                                strokeWidth = 2f,
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f))
+                            )
+                        }
                     }
-                    // 航班色块
+
+                    // ---- 5) 航班色块：按「日期序 × 1440 + 当日分钟」落到连续轴上 ----
                     slots.forEach { slot ->
+                        val di = dayIndexOf[slot.date] ?: return@forEach
                         val row = gates.indexOf(slot.gate)
                         if (row < 0) return@forEach
-                        val left = (slot.startMin - axisStartMin) * pxPerMin - ox
-                        val right = (slot.endMin - axisStartMin) * pxPerMin - ox
+                        val absStart = di * MINUTES_PER_DAY + slot.startMin
+                        val absEnd = di * MINUTES_PER_DAY + slot.endMin
+                        val left = absStart * pxPerMin - ox
+                        val right = absEnd * pxPerMin - ox
                         if (right < 0f || left > w) return@forEach
                         val barColor = when {
                             slot.conflict -> ConflictRed
@@ -259,32 +398,44 @@ fun GateGanttChart(
                             size = Size((right - left - 2f).coerceAtLeast(2f), barPx),
                             cornerRadius = CornerRadius(4.dp.toPx())
                         )
-                        if (right - left > 52.dp.toPx()) {
-                            drawIntoCanvas { c ->
-                                c.nativeCanvas.drawText(
-                                    slot.flightNo,
-                                    left + 6.dp.toPx(),
-                                    top + barPx / 2f + 4.dp.toPx(),
-                                    barTextPaint
-                                )
+                        val barW = right - left
+                        if (barW > 52.dp.toPx() * textScale) {
+                            // 放大后色块更宽，顺带把占用时间也显示出来，充分利用空间
+                            val text = if (barW > 150.dp.toPx() * textScale) {
+                                "${slot.flightNo}  ${fmtTime(slot.startMin)}-${fmtTime(slot.endMin)}"
+                            } else slot.flightNo
+                            if (barTextPaint.measureText(text) <= barW - 10.dp.toPx()) {
+                                drawIntoCanvas { c ->
+                                    c.nativeCanvas.drawText(
+                                        text,
+                                        left + 6.dp.toPx(),
+                                        top + barPx / 2f + barTextPaint.textSize / 3f,
+                                        barTextPaint
+                                    )
+                                }
                             }
                         }
                     }
                 }
+
                 // ---- 点击命中层：子节点先于父级手势处理，点击不会被拖动/缩放吞掉 ----
                 Box(
                     Modifier
                         .matchParentSize()
-                        .pointerInput(gates, slots) {
+                        .pointerInput(gates, slots, dates) {
                             detectTapGestures { pos ->
                                 val contentX = pos.x + oxState.value
                                 val contentY = pos.y - headerPx
                                 if (contentY < 0f) return@detectTapGestures
                                 val row = (contentY / rowPx).toInt()
                                 val gate = gates.getOrNull(row) ?: return@detectTapGestures
-                                val minute = axisStartMin + (contentX / pxState.value).toInt()
+                                val absMin = (contentX / pxState.value).toInt()
+                                val di = absMin / MINUTES_PER_DAY
+                                val date = dates.getOrNull(di) ?: return@detectTapGestures
+                                val minute = absMin % MINUTES_PER_DAY
                                 slots.firstOrNull {
-                                    it.gate == gate && minute >= it.startMin && minute < it.endMin
+                                    it.date == date && it.gate == gate &&
+                                        minute >= it.startMin && minute < it.endMin
                                 }?.let(onSlotClick)
                             }
                         }
@@ -294,14 +445,50 @@ fun GateGanttChart(
     }
 }
 
-/** 甘特图卡片（竖屏内嵌：横向滑动 + 双指缩放 + 全屏入口） */
+/** 缩放控件：+ / − 放大缩小，点百分比复位到 100%（放大时刻度与航班号同步变大） */
+@Composable
+fun ZoomControls(zoomState: GanttZoomState) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        ZoomButton("-") { zoomState.zoomOut() }
+        Text(
+            "${(zoomState.scale * 100).toInt()}%",
+            fontSize = 11.sp,
+            color = TextSub,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .width(40.dp)
+                .clickable { zoomState.reset() }
+        )
+        ZoomButton("+") { zoomState.zoomIn() }
+    }
+}
+
+@Composable
+private fun ZoomButton(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(26.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(BlueLight)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Blue)
+    }
+}
+
+/** 甘特图卡片（竖屏内嵌：一张连续日期轴 + 滑动 + 缩放 + 全屏入口） */
 @Composable
 fun GanttCard(
     gates: List<String>,
     slots: List<GateSlot>,
+    dates: List<String>,
     onExpand: () -> Unit,
-    onSlotClick: (GateSlot) -> Unit
+    onSlotClick: (GateSlot) -> Unit,
+    showNowLine: Boolean = true,
+    today: String = dateOf(0)
 ) {
+    val zoom = rememberGanttZoomState()
     AppCard {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -317,6 +504,8 @@ fun GanttCard(
                 color = TextMain,
                 modifier = Modifier.weight(1f)
             )
+            ZoomControls(zoom)
+            Spacer(Modifier.width(6.dp))
             Row(
                 Modifier
                     .clip(RoundedCornerShape(6.dp))
@@ -336,11 +525,60 @@ fun GanttCard(
             }
         }
         Spacer(Modifier.height(8.dp))
-        GanttLegend()
-        Spacer(Modifier.height(10.dp))
-        GateGanttChart(gates = gates, slots = slots, fitWidth = false, onSlotClick = onSlotClick)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            GanttLegend()
+            Spacer(Modifier.weight(1f))
+            Text(
+                "共 ${dates.size} 天 · ${dates.firstOrNull() ?: ""} 起",
+                fontSize = 11.sp,
+                color = TextSub
+            )
+        }
         Spacer(Modifier.height(8.dp))
-        Text("左右滑动查看全天 24 小时 · 双指缩放 · 点击色块查看详情", fontSize = 11.sp, color = TextSub)
+        // 日期快捷跳转：连续轴很长时点一下就到那天的 00:00，不必一路滑过去
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            dates.forEachIndexed { i, d ->
+                val label = when (d) {
+                    today -> "今天"
+                    nextDate(today) -> "明天"
+                    else -> d.takeLast(5)
+                }
+                Text(
+                    label,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Blue,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(BlueLight)
+                        .clickable { zoom.goToDay(i) }
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        GateGanttChart(
+            gates = gates,
+            slots = slots,
+            dates = dates,
+            fitWidth = false,
+            onSlotClick = onSlotClick,
+            zoomState = zoom,
+            showNowLine = showNowLine,
+            today = today
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "左右滑动 / 点日期标签定位 · 双指或 + / − 放大（刻度、日期、航班号同步变大）· 点击色块看详情",
+            fontSize = 11.sp,
+            color = TextSub
+        )
     }
 }
 

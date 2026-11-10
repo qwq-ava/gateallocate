@@ -36,6 +36,7 @@ fun SlotDetailDialog(slot: GateSlot, onClose: () -> Unit) {
         title = { Text(slot.flightNo, fontWeight = FontWeight.Bold) },
         text = {
             Column {
+                if (slot.date.isNotBlank()) DetailLine("日期", slot.date)
                 DetailLine("机位", slot.gate)
                 DetailLine("占用时段", "${fmtTime(slot.startMin)} - ${fmtTime(slot.endMin)}")
                 DetailLine("占用时长", "${slot.endMin - slot.startMin} 分钟")

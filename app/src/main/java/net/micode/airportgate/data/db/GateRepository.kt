@@ -156,6 +156,20 @@ object GateRepository {
         return out
     }
 
+    /** 读取库中所有「有航班」的日期（升序），用于多日连续甘特图确定时间轴覆盖范围 */
+    fun loadFlightDates(context: Context): List<String> {
+        val f = GateDbContract.Flight
+        val out = mutableListOf<String>()
+        val c = db(context).rawQuery(
+            "SELECT DISTINCT ${f.C_FLIGHT_DATE} FROM ${f.TABLE} " +
+                "WHERE ${f.C_FLIGHT_DATE} IS NOT NULL AND ${f.C_FLIGHT_DATE} <> '' " +
+                "ORDER BY ${f.C_FLIGHT_DATE} ASC",
+            null
+        )
+        c.use { while (it.moveToNext()) out += it.getString(0) }
+        return out
+    }
+
     /** 删除某一天的航班（重新导入前清底用） */
     fun clearFlights(context: Context, date: String): Int =
         db(context).delete(GateDbContract.Flight.TABLE, "${GateDbContract.Flight.C_FLIGHT_DATE}=?", arrayOf(date))

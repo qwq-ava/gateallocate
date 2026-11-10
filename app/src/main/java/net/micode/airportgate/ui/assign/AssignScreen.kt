@@ -1,6 +1,8 @@
 package net.micode.airportgate.ui.assign
 
 import android.content.pm.ActivityInfo
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -8,11 +10,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -24,18 +29,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import net.micode.airportgate.biz.AllocationReadiness
 import net.micode.airportgate.biz.AllocationService
-import net.micode.airportgate.data.model.DayFlight
+import net.micode.airportgate.biz.TimelineResult
 import net.micode.airportgate.data.model.DataSync
 import net.micode.airportgate.data.model.GateSlot
+import net.micode.airportgate.data.model.MINUTES_PER_DAY
 import net.micode.airportgate.data.model.dateOf
 import net.micode.airportgate.data.model.dayFlightToSlot
 import net.micode.airportgate.data.model.findActivity
@@ -46,6 +54,7 @@ import net.micode.airportgate.ui.gantt.FullscreenGanttDialog
 import net.micode.airportgate.ui.gantt.GanttCard
 import net.micode.airportgate.ui.gantt.SlotDetailDialog
 import net.micode.airportgate.ui.theme.Blue
+import net.micode.airportgate.ui.theme.BlueLight
 import net.micode.airportgate.ui.theme.ConflictRed
 import net.micode.airportgate.ui.theme.TextSub
 
@@ -54,56 +63,70 @@ import net.micode.airportgate.ui.theme.TextSub
 @Composable
 fun AssignScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    // 操作日期 = 明天：与「数据导入」目标日（明天）对齐，导入的航班才能被分配到；
-    // 跨夜航班的前段落在明天，分配时会展成次日（后天）并固定到同一机位。
-    val opDate = remember { dateOf(1) }
+    val today = remember { dateOf(0) }
 
-    // ---- 分配结果（引擎输出，用于甘特图展示） ----
-    var currentFlights by remember { mutableStateOf<List<DayFlight>>(emptyList()) }
-    var gateCodes by remember { mutableStateOf<List<String>>(emptyList()) }
+    // 「一键分配」的目标日期：0=今天，1=明天。只决定分配写到哪天，
+    // 甘特图始终是一张从今天起的连续多日时间轴，不再随这里切换。
+    var opOffset by remember { mutableStateOf(1) }
+    val opDate = dateOf(opOffset)
+
+    // ---- 甘特图交互状态 ----
+    var showFullGantt by remember { mutableStateOf(false) }
+    var selectedSlot by remember { mutableStateOf<GateSlot?>(null) }
+
+    // ---- 甘特图数据源：连续多日只读回显（引擎输出后重新回读，保证日期归属正确） ----
+    var timeline by remember { mutableStateOf(TimelineResult(emptyList(), emptyList())) }
+    val dates = timeline.days.map { it.date }.ifEmpty { listOf(today) }
+    val gateCodes = timeline.gateCodes
+
     var allocating by remember { mutableStateOf(false) }
     var lastFailed by remember { mutableStateOf<List<String>>(emptyList()) }
-
-    // 分配就绪状态：航班与机位是否各自存在（用于按钮置灰与未就绪弹窗）
     var readiness by remember { mutableStateOf(AllocationReadiness(false, false)) }
     val canAllocate = readiness.canAllocate
 
-    // 数据版本变化（航班导入 / 机位维护保存后 DataSync.bump()）时重新探测可分配性；
-    // 这里只探测、不自动分配——分配动作交由用户点击「一键分配」触发。
     val dataVersion = DataSync.version
-    LaunchedEffect(dataVersion) {
-        readiness = AllocationService.readiness(context, opDate)
+
+    /** 只读刷新：重建连续时间轴 + 重新探测目标日的可分配性 */
+    suspend fun refresh(targetDate: String) {
+        val t = AllocationService.timeline(context)
+        timeline = t
+        lastFailed = t.days.firstOrNull { it.date == targetDate }?.failedFlightNos ?: emptyList()
+        readiness = AllocationService.readiness(context, targetDate)
+        selectedSlot = null
     }
+
+    // 切换分配目标日 / 数据版本变化（导入航班、维护机位后 DataSync.bump()）时只读回显，
+    // 绝不自动分配——分配动作始终由用户点击「一键分配」触发。
+    LaunchedEffect(opDate, dataVersion) { refresh(opDate) }
 
     // 置灰按钮被点击时的两个未就绪提醒弹窗
     var showFlightWarn by remember { mutableStateOf(false) }
     var showGateWarn by remember { mutableStateOf(false) }
 
-    // 协程作用域：按钮点击时启动分配
     val scope = rememberCoroutineScope()
 
-    // 真正执行一次分配（点击「一键分配」时调用）
+    // 真正执行一次分配（点击「一键分配」时调用）。
+    // 记录目标日期，避免分配过程中切换日期导致结果串到另一天上。
     fun runAllocation() {
         if (allocating || !canAllocate) return
+        val targetDate = opDate
         scope.launch {
             allocating = true
             try {
-                // 业务逻辑交由 domain.AllocationService 执行：
-                // 读取航班+机位 -> 引擎分配 -> 落库 t_assignment/t_gate_usage -> 回写航班
-                val res = AllocationService.allocate(context, opDate)
+                val res = AllocationService.allocate(context, targetDate)
                 delay(300) // 让「分配中」状态可见
-                currentFlights = res.flights
-                gateCodes = res.gateCodes
-                lastFailed = res.failedFlightNos
+                if (opDate == targetDate) {
+                    // 重新回读整条时间轴：跨夜后段等次日结果也能立刻显示在图上
+                    refresh(targetDate)
+                    lastFailed = res.failedFlightNos
+                }
             } finally {
                 allocating = false
             }
         }
     }
 
-    // ---- 甘特图状态 ----
-    var showFullGantt by remember { mutableStateOf(false) }
-    var selectedSlot by remember { mutableStateOf<GateSlot?>(null) }
+    // ---- 全屏甘特图：横屏呈现连续日期 ----
     val activity = context.findActivity()
     LaunchedEffect(showFullGantt) {
         activity?.requestedOrientation = if (showFullGantt) {
@@ -116,18 +139,56 @@ fun AssignScreen(onBack: () -> Unit) {
         onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     }
 
-    // 全天 00:00 - 24:00 航班（甘特图数据源）
+    // ---- 甘特图色块：按日期分别判定「已完成」----
+    // 过去的日期全部已完成(1440)，今天按当前时刻，未来日期都不判为已完成(-1)。
     val nowMin = remember { nowMinuteOfDay() }
-
-    // ---- 甘特图数据：全天 24 小时机位占用时段（同机位时段重叠自动标红） ----
-    val ganttSlots = remember(nowMin, currentFlights) {
-        markConflicts(currentFlights.map { dayFlightToSlot(it, nowMin) })
+    val ganttSlots = remember(timeline, nowMin, today) {
+        markConflicts(timeline.days.flatMap { day ->
+            val nowForDay = when {
+                day.date < today -> MINUTES_PER_DAY
+                day.date == today -> nowMin
+                else -> -1
+            }
+            day.flights.map { dayFlightToSlot(it, nowForDay, day.date) }
+        })
     }
-    val shownGates = gateCodes
-    val shownSlots = ganttSlots
 
     Column(Modifier.fillMaxSize()) {
-        SubTopBar("机位分配 · $opDate", onBack)
+        SubTopBar("机位分配", onBack)
+
+        // ---- 分配日期：只影响「一键分配」的落库日期，不影响下面那张连续甘特图 ----
+        Surface(color = Color.White, shadowElevation = 1.dp) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("分配日期", fontSize = 12.sp, color = TextSub)
+                Spacer(Modifier.width(10.dp))
+                listOf(0 to "今天", 1 to "明天").forEach { (offset, label) ->
+                    val active = opOffset == offset
+                    Text(
+                        "$label ${dateOf(offset)}",
+                        fontSize = 12.sp,
+                        color = if (active) Blue else TextSub,
+                        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(if (active) BlueLight else Color.Transparent)
+                            .clickable(enabled = !allocating) {
+                                if (opOffset != offset) {
+                                    showFullGantt = false
+                                    opOffset = offset
+                                }
+                            }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+            }
+        }
+
         Column(
             Modifier
                 .weight(1f)
@@ -169,8 +230,8 @@ fun AssignScreen(onBack: () -> Unit) {
                 Text(
                     when {
                         allocating -> "正在分配，请稍候…"
-                        !canAllocate -> "尚无可分配数据：请先在「航班导入」录入航班、在「机位信息」维护机位"
-                        else -> "区间图着色 + 回溯，点击上方按钮开始分配"
+                        !canAllocate -> "$opDate 尚无可分配数据：请先在「航班导入」录入航班、在「机位信息」维护机位"
+                        else -> "甘特图连续显示 ${dates.size} 天，左右滑动查看；点击按钮对 $opDate 分配"
                     },
                     fontSize = 12.sp,
                     color = TextSub
@@ -186,28 +247,34 @@ fun AssignScreen(onBack: () -> Unit) {
             }
 
             Spacer(Modifier.height(16.dp))
-            // ---- 甘特图（机位 × 时间） ----
+            // ---- 一张连续甘特图：今天 24h 排完接下一天，按日期依次排开 ----
             GanttCard(
-                gates = shownGates,
-                slots = shownSlots,
+                gates = gateCodes,
+                slots = ganttSlots,
+                dates = dates,
                 onExpand = {
                     selectedSlot = null
                     showFullGantt = true
                 },
-                onSlotClick = { selectedSlot = it }
+                onSlotClick = { selectedSlot = it },
+                showNowLine = true,
+                today = today
             )
 
             Spacer(Modifier.height(16.dp))
         }
     }
 
-    // 甘特图全屏（横屏呈现全部时段）
+    // 甘特图全屏（横屏，同一张连续日期轴）
     if (showFullGantt) {
         FullscreenGanttDialog(
-            gates = shownGates,
-            slots = shownSlots,
+            gates = gateCodes,
+            slots = ganttSlots,
+            dates = dates,
             onSlotClick = { selectedSlot = it },
-            onClose = { showFullGantt = false }
+            onClose = { showFullGantt = false },
+            showNowLine = true,
+            today = today
         )
     }
 
